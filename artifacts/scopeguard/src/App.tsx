@@ -13,6 +13,13 @@ import ProjectDetail from "@/pages/project-detail";
 import ChangeRequests from "@/pages/change-requests";
 import Contacts from "@/pages/contacts";
 import Approve from "@/pages/approve";
+import Analytics from "@/pages/analytics";
+import Team from "@/pages/team";
+import Webhooks from "@/pages/webhooks";
+import AuditLog from "@/pages/audit-log";
+import Reminders from "@/pages/reminders";
+import Exports from "@/pages/exports";
+import Search from "@/pages/search";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -61,6 +68,27 @@ function Router() {
       </Route>
       <Route path="/contacts">
         <ProtectedLayout><Contacts /></ProtectedLayout>
+      </Route>
+      <Route path="/analytics">
+        <ProtectedLayout><Analytics /></ProtectedLayout>
+      </Route>
+      <Route path="/team">
+        <ProtectedLayout><Team /></ProtectedLayout>
+      </Route>
+      <Route path="/webhooks">
+        <ProtectedLayout><Webhooks /></ProtectedLayout>
+      </Route>
+      <Route path="/audit-log">
+        <ProtectedLayout><AuditLog /></ProtectedLayout>
+      </Route>
+      <Route path="/reminders">
+        <ProtectedLayout><Reminders /></ProtectedLayout>
+      </Route>
+      <Route path="/exports">
+        <ProtectedLayout><Exports /></ProtectedLayout>
+      </Route>
+      <Route path="/search">
+        <ProtectedLayout><Search /></ProtectedLayout>
       </Route>
 
       <Route component={NotFound} />

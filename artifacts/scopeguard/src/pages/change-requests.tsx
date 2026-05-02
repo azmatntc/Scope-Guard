@@ -133,7 +133,7 @@ export default function ChangeRequests() {
   const { data: changeRequests, isLoading } = useQuery(
     getListChangeRequestsQueryOptions({
       search: search || undefined,
-      status: statusFilter !== "ALL" ? statusFilter : undefined,
+      status: statusFilter !== "ALL" ? statusFilter as any : undefined,
     })
   );
 

@@ -139,7 +139,7 @@ export default function Projects() {
   const { data: projects, isLoading } = useQuery(
     getListProjectsQueryOptions({
       search: search || undefined,
-      status: statusFilter !== "ALL" ? statusFilter : undefined,
+      status: statusFilter !== "ALL" ? statusFilter as any : undefined,
     })
   );
 

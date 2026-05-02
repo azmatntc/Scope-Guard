@@ -4,3 +4,8 @@ export * from "./clientContacts";
 export * from "./projects";
 export * from "./changeRequests";
 export * from "./activityLog";
+export * from "./auditLog";
+export * from "./teamMembers";
+export * from "./webhooks";
+export * from "./savedViews";
+export * from "./reminders";

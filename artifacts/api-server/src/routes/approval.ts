@@ -3,6 +3,8 @@ import { db } from "@workspace/db";
 import { changeRequestsTable, projectsTable, clientContactsTable, organizationsTable, activityLogTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
+import { fireWebhookEvent } from "./webhooks";
+import { writeAuditLog } from "./auditLogs";
 
 const router: IRouter = Router();
 
@@ -82,6 +84,32 @@ router.patch("/approve/:token", async (req, res) => {
     clientName: contact.name,
     action: actionMap[decision],
     totalCents: cr.totalCents,
+  });
+
+  const eventType = decision === "approve" ? "change_request.approved"
+    : decision === "reject" ? "change_request.rejected"
+    : "change_request.revised";
+
+  await writeAuditLog({
+    organizationId: project.organizationId,
+    action: decision === "approve" ? "CR_APPROVED" : decision === "reject" ? "CR_REJECTED" : "CR_REVISED",
+    resourceType: "change_request",
+    resourceId: cr.id,
+    resourceLabel: cr.title,
+    ipAddress: req.ip || undefined,
+    metadata: { decision, comments, clientEmail: contact.email },
+  });
+
+  fireWebhookEvent(project.organizationId, eventType, {
+    data: {
+      id: cr.id,
+      title: cr.title,
+      projectName: project.name,
+      clientName: contact.name,
+      totalCents: cr.totalCents,
+      status: newStatus,
+      comments,
+    },
   });
 
   return res.json({

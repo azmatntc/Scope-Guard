@@ -12,16 +12,45 @@ import {
   Users,
   LogOut,
   ChevronRight,
+  BarChart3,
+  Zap,
+  Bell,
+  Download,
+  Search,
+  ShieldCheck,
+  UsersRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 
-const NAV = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/projects", label: "Projects", icon: FolderKanban },
-  { href: "/change-requests", label: "Change Requests", icon: FileText },
-  { href: "/contacts", label: "Clients", icon: Users },
+const NAV_GROUPS = [
+  {
+    label: "Workspace",
+    items: [
+      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/projects", label: "Projects", icon: FolderKanban },
+      { href: "/change-requests", label: "Change Orders", icon: FileText },
+      { href: "/contacts", label: "Clients", icon: Users },
+      { href: "/search", label: "Search", icon: Search },
+    ],
+  },
+  {
+    label: "Insights",
+    items: [
+      { href: "/analytics", label: "Analytics", icon: BarChart3 },
+      { href: "/reminders", label: "Reminders", icon: Bell },
+      { href: "/exports", label: "Exports", icon: Download },
+    ],
+  },
+  {
+    label: "Settings",
+    items: [
+      { href: "/team", label: "Team", icon: UsersRound },
+      { href: "/webhooks", label: "Webhooks", icon: Zap },
+      { href: "/audit-log", label: "Audit Log", icon: ShieldCheck },
+    ],
+  },
 ];
 
 export default function AppLayout({ children }: { children: ReactNode }) {
@@ -52,25 +81,34 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           <span className="font-semibold text-sm tracking-tight">ScopeGuard</span>
         </div>
 
-        <nav className="flex-1 px-2 py-3 space-y-0.5">
-          {NAV.map(({ href, label, icon: Icon }) => {
-            const active = location === href || location.startsWith(href + "/");
-            return (
-              <Link
-                key={href}
-                href={href}
-                className={cn(
-                  "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
-                  active
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                )}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                {label}
-              </Link>
-            );
-          })}
+        <nav className="flex-1 px-2 py-3 overflow-y-auto space-y-4">
+          {NAV_GROUPS.map((group) => (
+            <div key={group.label}>
+              <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                {group.label}
+              </p>
+              <div className="space-y-0.5">
+                {group.items.map(({ href, label, icon: Icon }) => {
+                  const active = location === href || location.startsWith(href + "/");
+                  return (
+                    <Link
+                      key={href}
+                      href={href}
+                      className={cn(
+                        "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                        active
+                          ? "bg-primary/10 text-primary"
+                          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      )}
+                    >
+                      <Icon className="w-4 h-4 shrink-0" />
+                      {label}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </nav>
 
         <div className="px-2 pb-3">
