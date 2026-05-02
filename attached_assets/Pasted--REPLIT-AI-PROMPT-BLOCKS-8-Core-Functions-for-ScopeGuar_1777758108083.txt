@@ -1,0 +1,1934 @@
+# 🎯 REPLIT.AI PROMPT BLOCKS: 8 Core Functions for ScopeGuard
+
+*Copy-paste each block individually into Replit.ai. Build in the order listed for maximum compounding value.*
+
+---
+
+## 📋 MASTER INDEX (Build Order)
+
+```
+1️⃣ calculate_scope_total_cents() → Financial accuracy foundation
+2️⃣ validate_state_transition() → Workflow integrity
+3️⃣ build_compliant_queryset() → Query performance baseline
+4️⃣ jsonb_diff() → Audit trail engine
+5️⃣ optimisticMutation() → Instant UX feedback
+6️⃣ useDebouncedFilter() → Smart filtering + URL sync
+7️⃣ atomic_with_audit() → Transaction-safe mutations
+8️⃣ hmac_webhook_signature() + verify_webhook() → Integration security
+```
+
+---
+
+## 🔹 BLOCK 1: `calculate_scope_total_cents()` — Deterministic Financial Math
+
+```markdown
+# REPLIT.AI PROMPT: Implement calculate_scope_total_cents()
+
+## CONTEXT
+You are building ScopeGuard, a change order approval SaaS for agencies. Financial calculations MUST be 100% deterministic, match accounting software rounding rules, and prevent floating-point drift.
+
+## FUNCTION SPEC
+Implement this Python function in `scopeguard/utils/financial.py`:
+
+```python
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+from typing import Optional
+
+def calculate_scope_total_cents(
+    hours: float, 
+    rate_cents: int, 
+    tax_rate: Optional[Decimal] = None,
+    currency_rate: Optional[Decimal] = None  # vs USD base
+) -> dict:
+    """
+    Calculate scope change totals with accounting-grade precision.
+    
+    Args:
+        hours: Estimated hours (float, >0)
+        rate_cents: Hourly rate in cents (int, >=0)
+        tax_rate: Optional tax percentage as Decimal('8.5') for 8.5%
+        currency_rate: Optional exchange rate vs USD as Decimal('0.85') for EUR
+    
+    Returns:
+        dict with integer cent values:
+        {
+            'subtotal_cents': int,      # hours * rate, rounded
+            'tax_cents': int,           # subtotal * tax_rate, rounded  
+            'total_cents': int,         # subtotal + tax
+            'base_usd_cents': int       # total converted to USD base
+        }
+    
+    Rounding: ROUND_HALF_UP (accounting standard)
+    All outputs are integers to prevent float drift.
+    """
+    # IMPLEMENTATION REQUIREMENTS:
+    # 1. Validate inputs: hours > 0, rate_cents >= 0, tax_rate 0-100 if provided
+    # 2. Use Decimal for ALL arithmetic to avoid float precision errors
+    # 3. Convert float hours to Decimal via str() to prevent binary float issues
+    # 4. Apply ROUND_HALF_UP at EACH calculation step (subtotal, tax, conversion)
+    # 5. Return ONLY integer cent values (no floats in output)
+    # 6. Handle None tax_rate/currency_rate gracefully (skip calculation)
+    # 7. Raise ValueError with clear message for invalid inputs
+    
+    # EDGE CASES TO TEST:
+    # - hours=0.25, rate_cents=15000 → subtotal=3750 cents ($37.50)
+    # - tax_rate=Decimal('8.375') → compound rounding must match QuickBooks
+    # - currency_rate=Decimal('0.0001') → prevent underflow to zero
+    # - Very large values: hours=1000, rate_cents=50000 → no overflow
+```
+
+## INTEGRATION NOTES
+- Call this function in `ChangeRequest.save()` before saving to DB
+- Store returned `subtotal_cents`, `tax_cents`, `total_cents` as IntegerFields
+- Use `base_usd_cents` for analytics/dashboard displays (USD-normalized)
+
+## TEST REQUIREMENTS (pytest)
+```python
+# tests/utils/test_financial.py
+import pytest
+from decimal import Decimal
+from scopeguard.utils.financial import calculate_scope_total_cents
+
+def test_basic_calculation():
+    result = calculate_scope_total_cents(hours=2.5, rate_cents=15000)
+    assert result['subtotal_cents'] == 37500  # 2.5 * $150
+    assert result['tax_cents'] == 0
+    assert result['total_cents'] == 37500
+    assert result['base_usd_cents'] == 37500
+
+def test_tax_rounding_matches_accounting():
+    # 8.375% tax on $100 → $8.38 (ROUND_HALF_UP)
+    result = calculate_scope_total_cents(
+        hours=1, rate_cents=10000, tax_rate=Decimal('8.375')
+    )
+    assert result['tax_cents'] == 838  # NOT 837 or 839
+
+def test_currency_conversion_precision():
+    # €100 at 0.85 rate → $117.65 USD (rounded)
+    result = calculate_scope_total_cents(
+        hours=1, rate_cents=10000, currency_rate=Decimal('0.85')
+    )
+    assert result['base_usd_cents'] == 11765
+
+def test_invalid_inputs_raise():
+    with pytest.raises(ValueError):
+        calculate_scope_total_cents(hours=-1, rate_cents=10000)
+    with pytest.raises(ValueError):
+        calculate_scope_total_cents(hours=1, rate_cents=-100)
+    with pytest.raises(ValueError):
+        calculate_scope_total_cents(hours=1, rate_cents=10000, tax_rate=Decimal('150'))
+```
+
+## TYPE HINTS & DOCUMENTATION
+- Full PEP 484 type hints on all parameters and return type
+- Google-style docstring with Args/Returns/Raises sections
+- Include example usage in docstring
+
+## OUTPUT FORMAT
+1. Complete `financial.py` with function implementation
+2. Complete `test_financial.py` with all test cases above + 2 additional edge cases
+3. Update `ChangeRequest.save()` to call this function (show diff)
+4. Add migration notes if new fields needed (should not be)
+
+# START: Implement calculate_scope_total_cents() now.
+```
+
+---
+
+## 🔹 BLOCK 2: `validate_state_transition()` — Workflow State Machine
+
+```markdown
+# REPLIT.AI PROMPT: Implement validate_state_transition()
+
+## CONTEXT
+ScopeGuard change requests follow a strict workflow: DRAFT → SENT → (APPROVED|REJECTED|REVISED). Invalid transitions must be blocked at the API layer to prevent data corruption and audit failures.
+
+## FUNCTION SPEC
+Implement this Python function in `change_requests/utils/workflow.py`:
+
+```python
+from enum import Enum, auto
+from dataclasses import dataclass
+from typing import Set, Optional
+
+class ChangeRequestStatus(Enum):
+    DRAFT = 'draft'
+    SENT = 'sent' 
+    APPROVED = 'approved'
+    REJECTED = 'rejected'
+    REVISED = 'revised'
+
+@dataclass(frozen=True)
+class TransitionRule:
+    allowed_targets: Set[ChangeRequestStatus]
+    required_permissions: Set[str]  # Django permission codenames
+    requires_internal_approval: bool = False
+
+# Define transition rules as module-level constant
+TRANSITION_RULES: dict[ChangeRequestStatus, TransitionRule] = {
+    ChangeRequestStatus.DRAFT: TransitionRule(
+        allowed_targets={ChangeRequestStatus.SENT},
+        required_permissions={'change_requests.can_send_to_client'}
+    ),
+    ChangeRequestStatus.SENT: TransitionRule(
+        allowed_targets={
+            ChangeRequestStatus.APPROVED,
+            ChangeRequestStatus.REJECTED, 
+            ChangeRequestStatus.REVISED
+        },
+        required_permissions=set(),  # Client token auth handles this
+        requires_internal_approval=False
+    ),
+    ChangeRequestStatus.REVISED: TransitionRule(
+        allowed_targets={ChangeRequestStatus.SENT, ChangeRequestStatus.DRAFT},
+        required_permissions={'change_requests.can_send_to_client'}
+    ),
+    ChangeRequestStatus.APPROVED: TransitionRule(
+        allowed_targets=set(),  # Terminal state
+        required_permissions=set()
+    ),
+    ChangeRequestStatus.REJECTED: TransitionRule(
+        allowed_targets={ChangeRequestStatus.DRAFT, ChangeRequestStatus.REVISED},
+        required_permissions={'change_requests.can_draft_change'}
+    ),
+}
+
+@dataclass
+class TransitionResult:
+    allowed: bool
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    requires_additional_approval: bool = False
+
+def validate_state_transition(
+    current_status: ChangeRequestStatus,
+    target_status: ChangeRequestStatus,
+    user_permissions: Set[str],  # Django permission codenames user has
+    is_client_token: bool = False,
+    organization_settings: Optional[dict] = None  # For org-specific rules
+) -> TransitionResult:
+    """
+    Validate if a state transition is allowed per workflow rules.
+    
+    Args:
+        current_status: Current CR status enum
+        target_status: Desired new status enum
+        user_permissions: Set of permission codenames the user possesses
+        is_client_token: True if request is from client approval link (bypasses some perms)
+        organization_settings: Org-specific overrides (e.g., require internal approval)
+    
+    Returns:
+        TransitionResult with allowed flag and error details if blocked
+    """
+    # IMPLEMENTATION REQUIREMENTS:
+    # 1. Look up rule for current_status in TRANSITION_RULES
+    # 2. If target_status not in rule.allowed_targets → block with INVALID_TRANSITION
+    # 3. If not is_client_token AND rule.required_permissions not subset of user_permissions → block with INSUFFICIENT_PERMISSIONS
+    # 4. If organization_settings.get('require_internal_approval') AND target_status == APPROVED → set requires_additional_approval=True
+    # 5. Return TransitionResult with appropriate fields populated
+    # 6. Handle unknown status values gracefully (return blocked with UNKNOWN_STATUS)
+    
+    # ERROR CODES (use for frontend error handling):
+    # 'INVALID_TRANSITION', 'INSUFFICIENT_PERMISSIONS', 'UNKNOWN_STATUS', 'ORGANIZATION_POLICY_BLOCKED'
+```
+
+## INTEGRATION NOTES
+- Call in `ChangeRequestViewSet.update()` before saving
+- Use result.error_code to return structured DRF error responses
+- Log blocked transitions to AuditLog with reason
+
+## TEST REQUIREMENTS (pytest)
+```python
+# tests/utils/test_workflow.py
+import pytest
+from change_requests.utils.workflow import (
+    validate_state_transition, 
+    ChangeRequestStatus, 
+    TransitionResult
+)
+
+def test_valid_draft_to_sent():
+    result = validate_state_transition(
+        current_status=ChangeRequestStatus.DRAFT,
+        target_status=ChangeRequestStatus.SENT,
+        user_permissions={'change_requests.can_send_to_client'},
+        is_client_token=False
+    )
+    assert result.allowed is True
+    assert result.error_code is None
+
+def test_invalid_draft_to_approved():
+    result = validate_state_transition(
+        current_status=ChangeRequestStatus.DRAFT,
+        target_status=ChangeRequestStatus.APPROVED,  # Skip SENT
+        user_permissions={'change_requests.can_send_to_client'},
+        is_client_token=False
+    )
+    assert result.allowed is False
+    assert result.error_code == 'INVALID_TRANSITION'
+
+def test_permission_bypass_for_client_token():
+    # Client approval link should bypass PM permission checks
+    result = validate_state_transition(
+        current_status=ChangeRequestStatus.SENT,
+        target_status=ChangeRequestStatus.APPROVED,
+        user_permissions=set(),  # Client has no Django perms
+        is_client_token=True
+    )
+    assert result.allowed is True
+
+def test_org_policy_requires_internal_approval():
+    result = validate_state_transition(
+        current_status=ChangeRequestStatus.SENT,
+        target_status=ChangeRequestStatus.APPROVED,
+        user_permissions=set(),
+        is_client_token=True,
+        organization_settings={'require_internal_approval': True}
+    )
+    assert result.allowed is True  # Still allowed client-side
+    assert result.requires_additional_approval is True  # But flag for backend workflow
+
+def test_unknown_status_handling():
+    result = validate_state_transition(
+        current_status='unknown_status',  # type: ignore
+        target_status=ChangeRequestStatus.APPROVED,
+        user_permissions=set(),
+        is_client_token=False
+    )
+    assert result.allowed is False
+    assert result.error_code == 'UNKNOWN_STATUS'
+```
+
+## TYPE HINTS & DOCUMENTATION
+- Full type hints including Enum, Set, Optional, dataclass
+- Google-style docstring with Args/Returns/Raises
+- Include transition diagram in module docstring:
+  ```
+  DRAFT → SENT → {APPROVED, REJECTED, REVISED}
+                ↑         ↓
+                └── REVISED ←┘
+  ```
+
+## OUTPUT FORMAT
+1. Complete `workflow.py` with enums, rules, and function
+2. Complete `test_workflow.py` with all test cases + 2 additional edge cases
+3. Show integration example in `ChangeRequestViewSet.update()` method
+4. Add DRF error response mapping example for error_code values
+
+# START: Implement validate_state_transition() now.
+```
+
+---
+
+## 🔹 BLOCK 3: `build_compliant_queryset()` — N+1-Free Query Builder
+
+```markdown
+# REPLIT.AI PROMPT: Implement build_compliant_queryset()
+
+## CONTEXT
+ScopeGuard dashboards must load 50k+ change requests with filters in <500ms. N+1 queries are the #1 performance killer. This function provides a composable, indexed, prefetched QuerySet builder.
+
+## FUNCTION SPEC
+Implement this Python function in `change_requests/utils/queries.py`:
+
+```python
+from django.db.models import Q, Prefetch, Count, Sum, F, Value
+from django.db.models.functions import TruncDate, Coalesce
+from django.utils import timezone
+from typing import Optional, Dict, Any
+from change_requests.models import ChangeRequest, Document
+from audit.models import AuditLog
+
+def build_compliant_queryset(
+    organization_id: str,
+    filters: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
+    include_annotations: bool = True
+):
+    """
+    Build a prefetched, filtered, annotated QuerySet for ChangeRequest.
+    
+    Args:
+        organization_id: UUID string for org scoping (REQUIRED for multi-tenancy)
+        filters: Dict of filter params:
+            - status: list[str] of status values to include
+            - date_from/date_to: date objects for created_at range
+            - client_email: str for exact client contact email match
+            - min_amount_cents/max_amount_cents: int range for total_with_tax_cents
+            - search: str for full-text search on title+description
+            - project_id: UUID string to filter by project
+        user_id: Optional UUID for permission-based filtering (future-proofing)
+        include_annotations: bool to skip heavy annotations for list views
+    
+    Returns:
+        QuerySet ready for serialization with:
+        - select_related on FKs (project, client_contact, currency, tax_rate)
+        - prefetch_related on reverse FKs (attachments, audit logs limited to 10)
+        - Composable filters using indexed fields only
+        - Optional annotations: approval_time_hours, attachment_count
+        - Ordered by -created_at by default
+    """
+    # IMPLEMENTATION REQUIREMENTS:
+    # 1. Start with base QS: ChangeRequest.objects.filter(organization_id=organization_id)
+    # 2. Apply select_related for: project, project__client_contact, currency, tax_rate
+    # 3. Apply prefetch_related with limited subqueries:
+    #    - attachments: Document.objects.only('id', 'filename', 'file_size_bytes', 'signature_status')
+    #    - auditlog_set: AuditLog.objects.order_by('-created_at').only('action', 'created_at')[:10]
+    # 4. Apply composable filters (ALL must use indexed fields):
+    #    - status__in, created_at__range, project__client_contact__email__iexact
+    #    - total_with_tax_cents__range, project_id
+    #    - Full-text search using Postgres: to_tsvector + plainto_tsquery with 'english' config
+    # 5. If include_annotations=True, add:
+    #    - approval_time_hours: Extract(EPOCH FROM (approved_at - created_at))/3600 (null if not approved)
+    #    - attachment_count: Count of related documents
+    # 6. Default ordering: -created_at
+    # 7. Return QS (do NOT execute .all() or .first())
+    
+    # PERFORMANCE GUARANTEES:
+    # - Zero N+1 queries when serializing with ChangeRequestSerializer
+    # - Full-text search uses GIN index on tsvector (document index creation in migration notes)
+    # - All filter fields have BTREE indexes (list required indexes in output)
+```
+
+## REQUIRED POSTGRES INDEXES (Include in Migration Notes)
+```python
+# In change_requests/migrations/XXXX_add_performance_indexes.py
+class Migration(migrations.Migration):
+    operations = [
+        # Composite index for common dashboard filters
+        migrations.AddIndex(
+            model_name='changerequest',
+            index=models.Index(
+                fields=['organization', 'status', '-created_at'],
+                name='idx_cr_org_status_created'
+            ),
+        ),
+        # Full-text search index
+        migrations.RunSQL(
+            sql="""
+            CREATE INDEX IF NOT EXISTS idx_cr_search_gin 
+            ON change_requests_changerequest 
+            USING GIN (to_tsvector('english', title || ' ' || description));
+            """,
+            reverse_sql="DROP INDEX IF EXISTS idx_cr_search_gin;"
+        ),
+        # Amount range filter index
+        migrations.AddIndex(
+            model_name='changerequest',
+            index=models.Index(
+                fields=['organization', 'total_with_tax_cents'],
+                name='idx_cr_org_amount',
+                condition=models.Q(status='APPROVED')  # Partial index for approved-only queries
+            ),
+        ),
+    ]
+```
+
+## TEST REQUIREMENTS (pytest + django-debug-toolbar)
+```python
+# tests/utils/test_queries.py
+import pytest
+from django.test import override_settings
+from django.db import connection
+from change_requests.utils.queries import build_compliant_queryset
+from change_requests.factories import ChangeRequestFactory, OrganizationFactory
+
+@override_settings(DEBUG=True)  # Enable query logging
+def test_no_n_plus_one_queries():
+    org = OrganizationFactory()
+    # Create test data
+    crs = ChangeRequestFactory.create_batch(20, organization=org)
+    for cr in crs:
+        # Add 2 attachments each to test prefetch
+        pass  # Factory would handle this
+    
+    # Execute query and capture SQL
+    qs = build_compliant_queryset(organization_id=str(org.id))
+    list(qs)  # Force evaluation
+    
+    # Count queries: should be <= 3 (main + 2 prefetches)
+    query_count = len(connection.queries)
+    assert query_count <= 3, f"Expected <=3 queries, got {query_count}: {[q['sql'][:100] for q in connection.queries]}"
+
+def test_full_text_search_uses_index():
+    org = OrganizationFactory()
+    ChangeRequestFactory.create(organization=org, title="Add user export feature")
+    
+    qs = build_compliant_queryset(
+        organization_id=str(org.id),
+        filters={'search': 'export feature'}
+    )
+    
+    # Use EXPLAIN ANALYZE to verify GIN index usage
+    with connection.cursor() as cursor:
+        cursor.execute(f"EXPLAIN ANALYZE {qs.query}")
+        plan = cursor.fetchone()[0]
+        assert 'GIN' in plan or 'Bitmap Index Scan' in plan, f"Index not used: {plan}"
+
+def test_composable_filters_combine_correctly():
+    org = OrganizationFactory()
+    # Setup test data with known values
+    cr1 = ChangeRequestFactory(organization=org, status='APPROVED', total_with_tax_cents=15000)
+    cr2 = ChangeRequestFactory(organization=org, status='DRAFT', total_with_tax_cents=25000)
+    
+    qs = build_compliant_queryset(
+        organization_id=str(org.id),
+        filters={
+            'status': ['APPROVED'],
+            'min_amount_cents': 10000,
+            'max_amount_cents': 20000
+        }
+    )
+    
+    results = list(qs)
+    assert len(results) == 1
+    assert results[0].id == cr1.id
+```
+
+## INTEGRATION EXAMPLE
+```python
+# In ChangeRequestViewSet.get_queryset()
+def get_queryset(self):
+    org_id = str(self.request.user.organization_id)
+    filters = {
+        k: v for k, v in self.request.query_params.items() 
+        if k in ['status', 'date_from', 'date_to', 'client_email', 'min_amount_cents', 'search']
+    }
+    return build_compliant_queryset(
+        organization_id=org_id,
+        filters=filters,
+        include_annotations=self.action == 'retrieve'  # Skip heavy annotations for list views
+    )
+```
+
+## OUTPUT FORMAT
+1. Complete `queries.py` with function implementation
+2. Complete migration file for required indexes
+3. Complete `test_queries.py` with performance + correctness tests
+4. Integration example in ViewSet
+5. Documentation: EXPLAIN ANALYZE output examples for common queries
+
+# START: Implement build_compliant_queryset() now.
+```
+
+---
+
+## 🔹 BLOCK 4: `jsonb_diff()` — Audit Trail Engine
+
+```markdown
+# REPLIT.AI PROMPT: Implement jsonb_diff()
+
+## CONTEXT
+ScopeGuard requires immutable, field-level audit trails for compliance (SOC 2) and client dispute resolution. This function generates minimal, human-readable diffs between model states without bloating storage.
+
+## FUNCTION SPEC
+Implement this Python function in `audit/utils/diff.py`:
+
+```python
+import json
+from datetime import datetime, date
+from decimal import Decimal
+from typing import Any, Optional
+from django.db.models import Model
+from django.forms.models import model_to_dict
+
+def jsonb_diff(
+    old_instance: Optional[Model], 
+    new_instance: Model,
+    exclude_fields: Optional[list[str]] = None
+) -> list[dict]:
+    """
+    Generate field-level diff between two model instances for audit logging.
+    
+    Args:
+        old_instance: Previous version of model (None if creation)
+        new_instance: Current version of model
+        exclude_fields: List of field names to ignore (default: system fields)
+    
+    Returns:
+        List of change records:
+        [
+            {
+                'field': 'status',
+                'old': 'draft',
+                'new': 'sent',
+                'field_type': 'CharField',
+                'changed_at': '2026-05-03T14:30:00Z'  # ISO format
+            },
+            ...
+        ]
+    
+    Rules:
+    - Skip fields in exclude_fields or starting with '_'
+    - Normalize datetime/date to ISO strings for comparison
+    - Handle Decimal → float conversion for JSON serialization
+    - Skip unchanged fields (old == new after normalization)
+    - Include field_type from model._meta for frontend rendering hints
+    """
+    # IMPLEMENTATION REQUIREMENTS:
+    # 1. Default exclude_fields: ['id', 'created_at', 'updated_at', 'organization_id', '_state']
+    # 2. Convert instances to dicts using model_to_dict with exclude parameter
+    # 3. For each field in new_dict:
+    #    a. Skip if in exclude_fields or starts with '_'
+    #    b. Get old_value (None if old_instance is None or field not present)
+    #    c. Normalize values for comparison:
+    #       - datetime/date → .isoformat()
+    #       - Decimal → float (safe for audit display, not for calc)
+    #       - UUID → str
+    #    d. If normalized old != normalized new, add to changes list
+    # 4. For each change, include:
+    #    - field name
+    #    - old/new values (JSON-serializable)
+    #    - field_type from new_instance._meta.get_field(field).get_internal_type()
+    #    - changed_at timestamp (use timezone.now().isoformat())
+    # 5. Return sorted list by field name for deterministic output
+    
+    # PERFORMANCE: O(n) where n = number of model fields (typically <50)
+    # STORAGE: Only store changed fields, not full snapshots
+```
+
+## INTEGRATION WITH AUDIT LOGGING
+```python
+# In audit/signals.py
+from audit.utils.diff import jsonb_diff
+
+@receiver(post_save, sender=ChangeRequest)
+def audit_change_request(sender, instance, created, **kwargs):
+    if created:
+        # Creation: log all fields as "new"
+        changes = [{'field': k, 'old': None, 'new': v, 'field_type': 'unknown'} 
+                  for k, v in model_to_dict(instance).items()]
+    else:
+        # Update: compute diff
+        old_instance = sender.objects.get(pk=instance.pk)
+        changes = jsonb_diff(old_instance, instance)
+    
+    if changes:  # Only log if something changed
+        AuditLog.objects.create(
+            organization=instance.organization,
+            action='UPDATE' if not created else 'CREATE',
+            content_object=instance,
+            field_changes=changes,  # JSONB field
+            request_metadata=capture_request_metadata()
+        )
+```
+
+## TEST REQUIREMENTS (pytest)
+```python
+# tests/audit/test_diff.py
+import pytest
+from datetime import datetime
+from decimal import Decimal
+from django.utils import timezone
+from audit.utils.diff import jsonb_diff
+from change_requests.factories import ChangeRequestFactory
+
+def test_detects_field_changes():
+    old_cr = ChangeRequestFactory(status='draft', total_with_tax_cents=10000)
+    new_cr = ChangeRequestFactory(
+        id=old_cr.id,  # Same PK for update simulation
+        status='sent', 
+        total_with_tax_cents=15000,
+        organization=old_cr.organization,
+        project=old_cr.project
+    )
+    
+    changes = jsonb_diff(old_cr, new_cr)
+    
+    # Should detect exactly 2 changes
+    assert len(changes) == 2
+    change_fields = {c['field'] for c in changes}
+    assert change_fields == {'status', 'total_with_tax_cents'}
+    
+    # Verify values are normalized
+    status_change = next(c for c in changes if c['field'] == 'status')
+    assert status_change['old'] == 'draft'
+    assert status_change['new'] == 'sent'
+    assert 'CharField' in status_change['field_type']
+
+def test_skips_excluded_fields():
+    old_cr = ChangeRequestFactory()
+    # Simulate updated_at changing (should be excluded)
+    old_cr.updated_at = timezone.now()
+    new_cr = ChangeRequestFactory(
+        id=old_cr.id,
+        organization=old_cr.organization,
+        project=old_cr.project,
+        updated_at=timezone.now()  # Different but excluded
+    )
+    
+    changes = jsonb_diff(old_cr, new_cr)
+    field_names = [c['field'] for c in changes]
+    assert 'updated_at' not in field_names
+    assert 'created_at' not in field_names
+
+def test_handles_creation_case():
+    new_cr = ChangeRequestFactory()
+    changes = jsonb_diff(None, new_cr)
+    
+    # Should include all non-excluded fields with old=None
+    assert any(c['field'] == 'title' and c['old'] is None for c in changes)
+
+def test_decimal_normalization():
+    # Test Decimal → float conversion for JSON serialization
+    from change_requests.models import ChangeRequest
+    old_cr = ChangeRequest(estimated_hours=Decimal('2.5'))
+    new_cr = ChangeRequest(estimated_hours=Decimal('3.0'))
+    
+    changes = jsonb_diff(old_cr, new_cr, exclude_fields=['id', 'organization'])
+    assert any(
+        c['field'] == 'estimated_hours' and 
+        isinstance(c['old'], float) and  # Normalized to float
+        c['old'] == 2.5 and 
+        c['new'] == 3.0
+        for c in changes
+    )
+```
+
+## FRONTEND INTEGRATION (Svelte Component Hint)
+```svelte
+<!-- In AuditLogViewer.svelte, render changes with field_type hints -->
+{#each audit.field_changes as change}
+  <div class="change-row">
+    <span class="field-name">{change.field}</span>
+    <span class="old-value {change.field_type}">{formatValue(change.old, change.field_type)}</span>
+    <span class="arrow">→</span>
+    <span class="new-value {change.field_type}">{formatValue(change.new, change.field_type)}</span>
+  </div>
+{/each}
+
+<!-- formatValue helper uses field_type for formatting -->
+function formatValue(value, fieldType) {
+  if (value === null) return '—';
+  if (fieldType === 'DateTimeField') return new Date(value).toLocaleString();
+  if (fieldType === 'DecimalField') return `$${(value/100).toFixed(2)}`;
+  return String(value);
+}
+```
+
+## OUTPUT FORMAT
+1. Complete `diff.py` with jsonb_diff implementation
+2. Complete `test_diff.py` with all test cases + 2 edge cases (UUID fields, JSONField changes)
+3. Integration example in audit signal handler
+4. Frontend rendering hint for Svelte component
+5. Performance note: O(n) complexity, safe for models with <100 fields
+
+# START: Implement jsonb_diff() now.
+```
+
+---
+
+## 🔹 BLOCK 5: `optimisticMutation()` — Svelte 5 Optimistic UI
+
+```markdown
+# REPLIT.AI PROMPT: Implement optimisticMutation() for Svelte 5
+
+## CONTEXT
+ScopeGuard must feel instant. When a PM approves a change request, the UI should update immediately while the API call happens in the background. If the call fails, revert gracefully with user feedback.
+
+## FUNCTION SPEC
+Implement this TypeScript function in `src/lib/utils/optimistic.ts`:
+
+```typescript
+// src/lib/utils/optimistic.ts
+import { toast } from '$lib/stores/ui.store';
+import type { ChangeRequest } from '$lib/types';
+
+export type OptimisticOptions<T> = {
+  // The Svelte store holding the list of items (must have update/set methods)
+  store: {
+    update: (updater: (items: T[]) => T[]) => void;
+    set: (items: T[]) => void;
+  };
+  
+  // Async function that performs the actual API mutation
+  mutationFn: (payload: Record<string, unknown>) => Promise<T>;
+  
+  // The payload to send to the API
+  payload: Record<string, unknown>;
+  
+  // Optional: Custom ID generator for optimistic items (default: crypto.randomUUID)
+  generateTempId?: () => string;
+  
+  // Optional: Custom rollback logic if default replacement isn't sufficient
+  onRollback?: (tempItem: T, error: unknown) => void;
+  
+  // Optional: Custom success handler beyond store update
+  onSuccess?: (realItem: T) => void;
+};
+
+/**
+ * Perform an optimistic UI update with automatic rollback on failure.
+ * 
+ * Workflow:
+ * 1. Create optimistic item with temp ID + _optimistic flag
+ * 2. Immediately update store to show item in UI
+ * 3. Execute mutationFn in background
+ * 4. On success: replace optimistic item with real server response
+ * 5. On failure: remove optimistic item + show error toast + call onRollback
+ * 
+ * @returns Promise that resolves with server response or rejects with error
+ */
+export async function optimisticMutation<T extends { id: string }>(
+  options: OptimisticOptions<T>
+): Promise<T> {
+  const {
+    store,
+    mutationFn,
+    payload,
+    generateTempId = () => crypto.randomUUID(),
+    onRollback,
+    onSuccess
+  } = options;
+  
+  // Create optimistic item with metadata
+  const tempId = generateTempId();
+  const optimisticItem: T = {
+    ...payload,
+    id: tempId,
+    _optimistic: true,
+    _createdAt: Date.now(),
+    status: 'pending' // Custom status for UI indication
+  } as T;
+  
+  // 1. Optimistic update: add to store immediately
+  store.update(items => [...items, optimisticItem]);
+  
+  try {
+    // 2. Execute real mutation
+    const response = await mutationFn(payload);
+    
+    // 3. Replace optimistic item with real server data
+    store.update(items => 
+      items.map(item => 
+        (item as any)._optimistic && (item as any).id === tempId 
+          ? { ...response, _optimistic: false } 
+          : item
+      )
+    );
+    
+    // 4. Optional success callback
+    onSuccess?.(response);
+    
+    return response;
+  } catch (error: unknown) {
+    // 5. Rollback: remove optimistic item
+    store.update(items => 
+      items.filter(item => 
+        !((item as any)._optimistic && (item as any).id === tempId)
+      )
+    );
+    
+    // 6. Custom rollback logic if provided
+    onRollback?.(optimisticItem, error);
+    
+    // 7. User feedback
+    const errorMessage = (error as any)?.response?.data?.error?.message 
+      || 'Action failed. Changes reverted.';
+    toast.error(errorMessage);
+    
+    // Re-throw for caller handling if needed
+    throw error;
+  }
+}
+```
+
+## USAGE EXAMPLE IN SVELTE COMPONENT
+```svelte
+<!-- src/lib/components/change-requests/ChangeRequestList.svelte -->
+<script lang="ts">
+  import { changeRequestStore } from '$lib/stores/change-requests.store';
+  import { api } from '$lib/api/client';
+  import { optimisticMutation } from '$lib/utils/optimistic';
+  
+  const handleApprove = async (cr: ChangeRequest) => {
+    await optimisticMutation<ChangeRequest>({
+      store: changeRequestStore,
+      mutationFn: (payload) => api.patch(`/change-requests/${cr.id}/`, payload),
+      payload: { status: 'approved' },
+      onSuccess: (updated) => {
+        // Optional: trigger analytics, notifications, etc.
+        console.log('Approved:', updated);
+      }
+    });
+  };
+</script>
+
+<button on:click={() => handleApprove(cr)} disabled={cr._optimistic}>
+  {cr._optimistic ? 'Processing...' : 'Approve'}
+</button>
+```
+
+## TYPE SAFETY & RUNES COMPATIBILITY
+- Full TypeScript generics with constraint `T extends { id: string }`
+- Compatible with Svelte 5 `$state` stores: pass `{ update: $state.update, set: $state.set }`
+- `_optimistic` flag is optional property, won't break existing types
+
+## TEST REQUIREMENTS (Vitest + Testing Library)
+```typescript
+// src/lib/utils/optimistic.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { optimisticMutation } from './optimistic';
+
+describe('optimisticMutation', () => {
+  let mockStore: { update: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> };
+  let mockMutationFn: ReturnType<typeof vi.fn>;
+  
+  beforeEach(() => {
+    mockStore = {
+      update: vi.fn(fn => fn([])), // Simplified for test
+      set: vi.fn()
+    };
+    mockMutationFn = vi.fn();
+  });
+  
+  it('updates store immediately with optimistic item', async () => {
+    const promise = optimisticMutation({
+      store: mockStore,
+      mutationFn: mockMutationFn,
+      payload: { title: 'Test' }
+    });
+    
+    // Verify store.update was called before API resolves
+    expect(mockStore.update).toHaveBeenCalled();
+    const callArg = mockStore.update.mock.calls[0][0];
+    const result = callArg([]);
+    expect(result[0]).toMatchObject({
+      title: 'Test',
+      _optimistic: true,
+      status: 'pending'
+    });
+    
+    // Resolve mutation
+    mockMutationFn.mockResolvedValue({ id: 'real-123', title: 'Test' });
+    await promise;
+    
+    // Verify replacement with real data
+    expect(mockStore.update).toHaveBeenCalledTimes(2);
+  });
+  
+  it('rolls back on mutation failure', async () => {
+    mockMutationFn.mockRejectedValue(new Error('API failed'));
+    
+    await expect(
+      optimisticMutation({
+        store: mockStore,
+        mutationFn: mockMutationFn,
+        payload: { title: 'Test' }
+      })
+    ).rejects.toThrow('API failed');
+    
+    // Verify rollback: filter out optimistic item
+    expect(mockStore.update).toHaveBeenCalledTimes(2); // add then remove
+  });
+  
+  it('calls onSuccess callback with real response', async () => {
+    const onSuccess = vi.fn();
+    const realResponse = { id: 'real-123', title: 'Test' };
+    mockMutationFn.mockResolvedValue(realResponse);
+    
+    await optimisticMutation({
+      store: mockStore,
+      mutationFn: mockMutationFn,
+      payload: { title: 'Test' },
+      onSuccess
+    });
+    
+    expect(onSuccess).toHaveBeenCalledWith(realResponse);
+  });
+});
+```
+
+## ERROR HANDLING & USER FEEDBACK
+- Extract error messages from DRF standard format: `error.response.data.error.message`
+- Fallback to generic message if parsing fails
+- Use existing `toast.error()` from UI store for consistency
+- Never swallow errors: re-throw after rollback for caller handling
+
+## OUTPUT FORMAT
+1. Complete `optimistic.ts` with full implementation + JSDoc
+2. Complete `optimistic.test.ts` with all test cases + 2 edge cases (custom ID generator, onRollback)
+3. Usage example in a Svelte component (show both store patterns: traditional + runes)
+4. Type definition for `_optimistic` flag in shared types file
+5. Performance note: Zero layout thrashing because store update is synchronous
+
+# START: Implement optimisticMutation() now.
+```
+
+---
+
+## 🔹 BLOCK 6: `useDebouncedFilter()` — Smart Filtering + URL Sync
+
+```markdown
+# REPLIT.AI PROMPT: Implement useDebouncedFilter() for Svelte 5
+
+## CONTEXT
+ScopeGuard dashboards have complex filters (status, date range, amount, search). Typing should not spam the API. Filters should sync to URL for bookmarking/sharing. Changes should apply after user pauses typing.
+
+## FUNCTION SPEC
+Implement this TypeScript composable in `src/lib/utils/filters.ts`:
+
+```typescript
+// src/lib/utils/filters.ts
+import { page } from '$app/state';
+import { goto } from '$app/navigation';
+import { browser } from '$app/environment';
+
+export type FilterConfig = {
+  // Debounce delay in milliseconds (default: 300)
+  delay?: number;
+  
+  // Sync filter state to URL query params (default: true)
+  urlSync?: boolean;
+  
+  // Custom serializer for complex filter values (default: JSON.stringify for arrays/objects)
+  serializeValue?: (key: string, value: unknown) => string | null;
+  
+  // Custom deserializer for URL params (default: parse JSON for arrays/objects)
+  deserializeValue?: (key: string, value: string) => unknown;
+  
+  // Fields to exclude from URL sync (e.g., ephemeral UI state)
+  excludeFromUrl?: string[];
+};
+
+export type FilterActions = {
+  // Apply new filters with debouncing
+  apply: (newFilters: Record<string, unknown>) => void;
+  
+  // Immediately apply filters without debounce (for button clicks)
+  applyNow: (newFilters: Record<string, unknown>) => void;
+  
+  // Reset to default filters
+  reset: () => void;
+  
+  // Get current filter state
+  get: () => Record<string, unknown>;
+  
+  // Subscribe to filter changes (for reactive components)
+  subscribe: (callback: (filters: Record<string, unknown>) => void) => () => void;
+};
+
+/**
+ * Create a debounced, URL-synced filter manager for Svelte components.
+ * 
+ * Features:
+ * - Debounce rapid changes to prevent API spam
+ * - Sync to URL query params for bookmarkable views
+ * - Parse complex values (arrays, dates) to/from URL strings
+ * - Reactive subscription for UI updates
+ * - Browser-only execution (SSR safe)
+ * 
+ * @param initialFilters - Starting filter state
+ * @param config - Optional configuration for debounce, serialization, etc.
+ * @returns FilterActions object with apply/reset/get/subscribe methods
+ */
+export function useDebouncedFilter(
+  initialFilters: Record<string, unknown> = {},
+  config: FilterConfig = {}
+): FilterActions {
+  const {
+    delay = 300,
+    urlSync = true,
+    serializeValue = defaultSerialize,
+    deserializeValue = defaultDeserialize,
+    excludeFromUrl = []
+  } = config;
+  
+  // Private state
+  let currentFilters = { ...initialFilters };
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  let subscribers: Array<(filters: Record<string, unknown>) => void> = [];
+  
+  // Notify subscribers of changes
+  const notify = () => {
+    subscribers.forEach(cb => cb({ ...currentFilters }));
+  };
+  
+  // Update URL query params (browser only)
+  const syncToUrl = (filters: Record<string, unknown>) => {
+    if (!browser || !urlSync) return;
+    
+    const params = new URLSearchParams(page.url.searchParams);
+    
+    // Clear existing filter params (prefix with 'f_' to avoid collisions)
+    Array.from(params.keys()).forEach(key => {
+      if (key.startsWith('f_')) params.delete(key);
+    });
+    
+    // Add new params
+    Object.entries(filters).forEach(([key, value]) => {
+      if (excludeFromUrl.includes(key)) return;
+      
+      const serialized = serializeValue(key, value);
+      if (serialized !== null && serialized !== undefined) {
+        params.set(`f_${key}`, serialized);
+      }
+    });
+    
+    // Update URL without page reload
+    goto(`?${params.toString()}`, { replaceState: true, noScroll: true });
+  };
+  
+  // Parse filters from URL on init (browser only)
+  const initFromUrl = () => {
+    if (!browser || !urlSync) return initialFilters;
+    
+    const parsed: Record<string, unknown> = {};
+    
+    page.url.searchParams.forEach((value, key) => {
+      if (key.startsWith('f_')) {
+        const filterKey = key.slice(2); // Remove 'f_' prefix
+        if (!excludeFromUrl.includes(filterKey)) {
+          parsed[filterKey] = deserializeValue(filterKey, value);
+        }
+      }
+    });
+    
+    return { ...initialFilters, ...parsed };
+  };
+  
+  // Initialize from URL if in browser
+  if (browser && urlSync) {
+    currentFilters = initFromUrl();
+  }
+  
+  // Debounced apply
+  const apply = (newFilters: Record<string, unknown>) => {
+    // Merge with current filters
+    currentFilters = { ...currentFilters, ...newFilters };
+    
+    // Clear pending timeout
+    if (timeout) clearTimeout(timeout);
+    
+    // Notify subscribers immediately for UI responsiveness
+    notify();
+    
+    // Debounce URL sync + API trigger
+    timeout = setTimeout(() => {
+      syncToUrl(currentFilters);
+      timeout = null;
+    }, delay);
+  };
+  
+  // Immediate apply (no debounce)
+  const applyNow = (newFilters: Record<string, unknown>) => {
+    currentFilters = { ...currentFilters, ...newFilters };
+    notify();
+    syncToUrl(currentFilters);
+  };
+  
+  // Reset to initial state
+  const reset = () => {
+    currentFilters = { ...initialFilters };
+    notify();
+    syncToUrl(currentFilters);
+  };
+  
+  // Get current filters
+  const get = () => ({ ...currentFilters });
+  
+  // Subscribe to changes
+  const subscribe = (callback: (filters: Record<string, unknown>) => void) => {
+    subscribers.push(callback);
+    // Immediately notify with current state
+    callback({ ...currentFilters });
+    // Return unsubscribe function
+    return () => {
+      subscribers = subscribers.filter(cb => cb !== callback);
+    };
+  };
+  
+  return { apply, applyNow, reset, get, subscribe };
+}
+
+// Default serializers/deserializers
+function defaultSerialize(key: string, value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (Array.isArray(value)) return value.join(',');
+  if (value instanceof Date) return value.toISOString().split('T')[0]; // YYYY-MM-DD
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function defaultDeserialize(key: string, value: string): unknown {
+  // Try parsing as array first (comma-separated)
+  if (value.includes(',')) {
+    return value.split(',').map(v => v.trim());
+  }
+  // Try parsing as date
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return new Date(value);
+  }
+  // Try parsing as JSON object
+  if (value.startsWith('{') || value.startsWith('[')) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value; // Fallback to string
+    }
+  }
+  // Boolean parsing
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  // Number parsing
+  if (!isNaN(Number(value)) && value.trim() !== '') {
+    return Number(value);
+  }
+  return value;
+}
+```
+
+## USAGE EXAMPLE IN SVELTE COMPONENT
+```svelte
+<!-- src/routes/projects/[projectId]/+page.svelte -->
+<script lang="ts">
+  import { useDebouncedFilter } from '$lib/utils/filters';
+  import { changeRequestStore } from '$lib/stores/change-requests.store';
+  
+  // Initialize filters with URL sync
+  const filters = useDebouncedFilter(
+    { status: ['draft', 'sent'], date_from: null },
+    { delay: 400, excludeFromUrl: ['search'] } // Don't sync search to URL
+  );
+  
+  // Subscribe to filter changes to trigger API fetch
+  const unsubscribe = filters.subscribe((newFilters) => {
+    changeRequestStore.fetch({ projectId: $page.params.projectId, filters: newFilters });
+  });
+  
+  // Cleanup subscription on unmount
+  onDestroy(() => unsubscribe());
+  
+  // Handler for search input (debounced)
+  const handleSearchInput = (event: Event) => {
+    const value = (event.target as HTMLInputElement).value;
+    filters.apply({ search: value || undefined });
+  };
+  
+  // Handler for status checkbox (immediate)
+  const handleStatusToggle = (status: string, checked: boolean) => {
+    const current = filters.get().status as string[] || [];
+    const updated = checked 
+      ? [...current, status] 
+      : current.filter(s => s !== status);
+    filters.apply({ status: updated.length ? updated : undefined });
+  };
+</script>
+
+<!-- Search input (debounced) -->
+<input 
+  type="search" 
+  placeholder="Search changes..." 
+  on:input={handleSearchInput}
+/>
+
+<!-- Status filters (immediate) -->
+{#each ['draft', 'sent', 'approved'] as status}
+  <label>
+    <input 
+      type="checkbox" 
+      checked={(filters.get().status as string[])?.includes(status)}
+      on:change={(e) => handleStatusToggle(status, e.currentTarget.checked)}
+    />
+    {status}
+  </label>
+{/each}
+```
+
+## SSR & BROWSER SAFETY
+- All URL operations wrapped in `if (browser)` checks
+- `page` import from `$app/state` is SSR-safe
+- Default serializers handle undefined/null gracefully
+- No side effects in module scope
+
+## TEST REQUIREMENTS (Vitest)
+```typescript
+// src/lib/utils/filters.test.ts
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { useDebouncedFilter } from './filters';
+
+// Mock SvelteKit app modules
+vi.mock('$app/state', () => ({
+  page: { url: new URL('https://example.com?') }
+}));
+vi.mock('$app/navigation', () => ({
+  goto: vi.fn()
+}));
+vi.mock('$app/environment', () => ({
+  browser: true
+}));
+
+describe('useDebouncedFilter', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+  
+  it('debounces rapid apply calls', () => {
+    const { goto } = await import('$app/navigation');
+    const filters = useDebouncedFilter({}, { delay: 300 });
+    
+    filters.apply({ status: 'draft' });
+    filters.apply({ status: 'sent' });
+    filters.apply({ search: 'test' });
+    
+    // URL should not update yet
+    expect(goto).not.toHaveBeenCalled();
+    
+    // Advance timer past debounce
+    vi.advanceTimersByTime(300);
+    
+    // Should sync final merged state
+    expect(goto).toHaveBeenCalledWith(
+      expect.stringContaining('f_status=sent&f_search=test'),
+      expect.objectContaining({ replaceState: true })
+    );
+  });
+  
+  it('applies immediately with applyNow', async () => {
+    const { goto } = await import('$app/navigation');
+    const filters = useDebouncedFilter({}, { delay: 300 });
+    
+    filters.applyNow({ status: 'approved' });
+    
+    // Should sync immediately without debounce
+    expect(goto).toHaveBeenCalledWith(
+      expect.stringContaining('f_status=approved'),
+      expect.objectContaining({ replaceState: true })
+    );
+  });
+  
+  it('serializes arrays and dates correctly', () => {
+    const filters = useDebouncedFilter({
+      status: ['draft', 'sent'],
+      date_from: new Date('2026-01-01')
+    });
+    
+    // Trigger URL sync
+    filters.applyNow({});
+    
+    const { goto } = await import('$app/navigation');
+    expect(goto).toHaveBeenCalledWith(
+      expect.stringContaining('f_status=draft,sent'),
+      expect.anything()
+    );
+    expect(goto).toHaveBeenCalledWith(
+      expect.stringContaining('f_date_from=2026-01-01'),
+      expect.anything()
+    );
+  });
+  
+  it('subscribers notified immediately, URL sync debounced', () => {
+    const filters = useDebouncedFilter({}, { delay: 300 });
+    const callback = vi.fn();
+    
+    const unsubscribe = filters.subscribe(callback);
+    
+    // Initial call with default filters
+    expect(callback).toHaveBeenCalledTimes(1);
+    
+    // Apply new filters
+    filters.apply({ status: 'approved' });
+    
+    // Subscriber notified immediately (UI responsiveness)
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(callback).toHaveBeenCalledWith(expect.objectContaining({ status: 'approved' }));
+    
+    // URL sync still pending
+    const { goto } = await import('$app/navigation');
+    expect(goto).not.toHaveBeenCalled();
+    
+    unsubscribe();
+  });
+});
+```
+
+## OUTPUT FORMAT
+1. Complete `filters.ts` with full implementation + JSDoc
+2. Complete `filters.test.ts` with all test cases + edge cases (SSR mode, custom serializers)
+3. Usage example in Svelte component showing both search (debounced) and toggle (immediate) patterns
+4. Type definitions for FilterConfig and FilterActions
+5. Performance note: Debounce prevents API spam; immediate subscriber notification maintains UI responsiveness
+
+# START: Implement useDebouncedFilter() now.
+```
+
+---
+
+## 🔹 BLOCK 7: `atomic_with_audit()` — Transaction-Safe Mutations
+
+```markdown
+# REPLIT.AI PROMPT: Implement atomic_with_audit() decorator
+
+## CONTEXT
+ScopeGuard financial data must never be partially written. If a change request update succeeds but the audit log fails, we have compliance risk. This decorator wraps DB mutations + audit logging in a single atomic transaction.
+
+## FUNCTION SPEC
+Implement this Python decorator in `audit/utils/transaction.py`:
+
+```python
+from functools import wraps
+from typing import Callable, TypeVar, ParamSpec, Optional
+from django.db import transaction
+from django.utils import timezone
+from django.forms.models import model_to_dict
+from audit.models import AuditLog
+from audit.utils.diff import jsonb_diff
+
+P = ParamSpec('P')
+R = TypeVar('R')
+
+def atomic_with_audit(
+    action: str,
+    model_instance_arg: str = 'self',  # Name of arg containing the model instance
+    metadata_extractor: Optional[Callable[[P], dict]] = None
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """
+    Decorator to wrap model mutations with atomic transaction + audit logging.
+    
+    Usage:
+        @atomic_with_audit(action='UPDATE', model_instance_arg='change_request')
+        def update_change_request(change_request: ChangeRequest, **updates):
+            for k, v in updates.items():
+                setattr(change_request, k, v)
+            change_request.save()
+    
+    Guarantees:
+    - If DB save fails, audit log is never written (atomic rollback)
+    - If audit log write fails, DB save is rolled back
+    - Audit entry captures field-level changes via jsonb_diff
+    - Works with both instance methods and standalone functions
+    
+    Args:
+        action: Audit action string ('CREATE', 'UPDATE', 'DELETE', 'APPROVE', etc.)
+        model_instance_arg: Name of the function argument that holds the model instance
+        metadata_extractor: Optional function to extract request metadata from function args
+    
+    Returns:
+        Decorated function that executes atomically with audit logging
+    """
+    def decorator(func: Callable[P, R]) -> Callable[P, R]:
+        @wraps(func)
+        @transaction.atomic
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            # Extract model instance from args/kwargs
+            model_instance = _extract_model_instance(args, kwargs, model_instance_arg)
+            organization = _extract_organization(model_instance)
+            
+            # Capture pre-state for diff
+            old_data = model_to_dict(model_instance) if model_instance.pk else None
+            
+            # Execute the wrapped function
+            result = func(*args, **kwargs)
+            
+            # Refresh instance to get post-save state (handles DB defaults, triggers)
+            if model_instance.pk:
+                model_instance.refresh_from_db()
+            
+            # Capture post-state and compute diff
+            new_data = model_to_dict(model_instance)
+            field_changes = jsonb_diff(old_data, new_data)
+            
+            # Only create audit log if something changed or it's a creation
+            if field_changes or old_data is None:
+                # Extract request metadata if extractor provided
+                request_metadata = {}
+                if metadata_extractor:
+                    try:
+                        request_metadata = metadata_extractor(*args, **kwargs)
+                    except Exception:
+                        # Never let metadata extraction break the transaction
+                        request_metadata = {'extraction_error': 'Failed to extract metadata'}
+                
+                # Create audit log entry
+                AuditLog.objects.create(
+                    organization=organization,
+                    action=action,
+                    content_object=model_instance,
+                    field_changes=field_changes,
+                    request_metadata={
+                        'timestamp': timezone.now().isoformat(),
+                        **request_metadata
+                    }
+                )
+            
+            return result
+        return wrapper
+    return decorator
+
+def _extract_model_instance(args: tuple, kwargs: dict, arg_name: str):
+    """Helper to extract model instance from function arguments"""
+    if arg_name in kwargs:
+        return kwargs[arg_name]
+    # Try positional args (naive: assumes order matches function signature)
+    # Production: use inspect.signature for robustness
+    for arg in args:
+        if hasattr(arg, '_meta') and hasattr(arg, 'pk'):  # Django model check
+            return arg
+    raise ValueError(f"Could not extract model instance from arg '{arg_name}'")
+
+def _extract_organization(model_instance) -> Optional['Organization']:
+    """Extract organization from model instance via common patterns"""
+    if hasattr(model_instance, 'organization'):
+        return model_instance.organization
+    if hasattr(model_instance, 'project') and hasattr(model_instance.project, 'organization'):
+        return model_instance.project.organization
+    return None
+```
+
+## USAGE EXAMPLE IN VIEWSET
+```python
+# change_requests/views.py
+from audit.utils.transaction import atomic_with_audit
+
+class ChangeRequestViewSet(viewsets.ModelViewSet):
+    # ... existing code ...
+    
+    @action(detail=True, methods=['post'])
+    @atomic_with_audit(
+        action='APPROVE',
+        model_instance_arg='change_request',
+        metadata_extractor=lambda cr, **kw: {
+            'approved_by_ip': kw.get('request').META.get('REMOTE_ADDR'),
+            'user_agent': kw.get('request').META.get('HTTP_USER_AGENT')
+        }
+    )
+    def approve(self, request, pk=None):
+        """Approve a change request with atomic audit logging"""
+        change_request = self.get_object()
+        
+        # Validate transition first (outside transaction for performance)
+        transition_result = validate_state_transition(
+            current_status=ChangeRequestStatus(change_request.status),
+            target_status=ChangeRequestStatus.APPROVED,
+            user_permissions=set(request.user.get_all_permissions()),
+            is_client_token=False
+        )
+        if not transition_result.allowed:
+            raise PermissionDenied(transition_result.error_message)
+        
+        # Atomic update + audit
+        change_request.status = 'approved'
+        change_request.approved_at = timezone.now()
+        change_request.approved_by_ip = request.META.get('REMOTE_ADDR')
+        change_request.save(update_fields=['status', 'approved_at', 'approved_by_ip'])
+        
+        return Response({'status': 'approved'})
+```
+
+## TEST REQUIREMENTS (pytest)
+```python
+# tests/audit/test_transaction.py
+import pytest
+from django.db import transaction
+from audit.utils.transaction import atomic_with_audit
+from change_requests.factories import ChangeRequestFactory, OrganizationFactory
+from audit.models import AuditLog
+
+def test_audit_log_created_on_success():
+    cr = ChangeRequestFactory(status='sent')
+    original_title = cr.title
+    
+    @atomic_with_audit(action='UPDATE', model_instance_arg='instance')
+    def update_title(instance, new_title):
+        instance.title = new_title
+        instance.save()
+        return instance
+    
+    # Execute wrapped function
+    updated_cr = update_title(instance=cr, new_title='New Title')
+    
+    # Verify DB update
+    updated_cr.refresh_from_db()
+    assert updated_cr.title == 'New Title'
+    
+    # Verify audit log
+    audit_entry = AuditLog.objects.get(content_object=cr, action='UPDATE')
+    assert any(
+        c['field'] == 'title' and c['old'] == original_title and c['new'] == 'New Title'
+        for c in audit_entry.field_changes
+    )
+
+def test_rollback_on_audit_failure(monkeypatch):
+    """If audit log write fails, entire transaction rolls back"""
+    cr = ChangeRequestFactory(status='sent')
+    
+    # Mock AuditLog.save to raise exception
+    original_save = AuditLog.save
+    def failing_save(self, *args, **kwargs):
+        raise Exception("Audit storage failed")
+    monkeypatch.setattr(AuditLog, 'save', failing_save)
+    
+    @atomic_with_audit(action='UPDATE', model_instance_arg='instance')
+    def update_status(instance, new_status):
+        old_status = instance.status
+        instance.status = new_status
+        instance.save()
+        return old_status  # Return old status to verify rollback
+    
+    # Execute should raise and rollback
+    with pytest.raises(Exception, match="Audit storage failed"):
+        update_status(instance=cr, new_status='approved')
+    
+    # Verify DB rolled back: status unchanged
+    cr.refresh_from_db()
+    assert cr.status == 'sent'  # Not 'approved'
+    
+    # Restore original method
+    monkeypatch.setattr(AuditLog, 'save', original_save)
+
+def test_no_audit_log_when_no_changes():
+    """Don't create audit entry if nothing actually changed"""
+    cr = ChangeRequestFactory()
+    original_count = AuditLog.objects.count()
+    
+    @atomic_with_audit(action='UPDATE', model_instance_arg='instance')
+    def noop_update(instance):
+        # Save without changes
+        instance.save()
+        return instance
+    
+    noop_update(instance=cr)
+    
+    # Audit count should be unchanged
+    assert AuditLog.objects.count() == original_count
+```
+
+## PERFORMANCE & SAFETY NOTES
+- `@transaction.atomic` ensures all-or-nothing: DB + audit log succeed or both fail
+- `refresh_from_db()` after save captures DB-level defaults/triggers for accurate diff
+- `jsonb_diff` is O(n) on field count (typically <50), negligible overhead
+- Metadata extractor failures are caught and logged, never break the transaction
+- Works with Django's `update_fields` optimization
+
+## OUTPUT FORMAT
+1. Complete `transaction.py` with decorator implementation + helper functions
+2. Complete `test_transaction.py` with success, rollback, and no-change test cases
+3. Integration example in ViewSet action method
+4. Type hints using ParamSpec/TypeVar for full generic support
+5. Documentation: Explain why atomicity matters for compliance (SOC 2, financial audits)
+
+# START: Implement atomic_with_audit() now.
+```
+
+---
+
+## 🔹 BLOCK 8: `hmac_webhook_signature()` + `verify_webhook()` — Cryptographic Security
+
+```markdown
+# REPLIT.AI PROMPT: Implement webhook signature functions
+
+## CONTEXT
+ScopeGuard sends webhooks to Zapier, Make, Slack, and accounting tools. These integrations must be cryptographically signed to prevent spoofing, replay attacks, and tampering. Implementation must match Stripe/GitHub standards.
+
+## FUNCTION SPEC
+Implement these Python functions in `integrations/utils/webhooks.py`:
+
+```python
+import hmac
+import hashlib
+import time
+import json
+from typing import Union, Optional
+from django.conf import settings
+
+def sign_webhook_payload(
+    payload: Union[dict, str], 
+    secret: str, 
+    timestamp: Optional[int] = None
+) -> str:
+    """
+    Sign a webhook payload using HMAC-SHA256 with timestamp.
+    
+    Format: "t={timestamp},v1={hex_signature}"
+    Matches Stripe signature format for compatibility.
+    
+    Args:
+        payload: Dict to sign (will be JSON-serialized) or pre-serialized JSON string
+        secret: Webhook signing secret (store in env vars, never in code)
+        timestamp: Unix timestamp (default: current time)
+    
+    Returns:
+        Signature string: "t=1714752000,v1=abc123..."
+    """
+    ts = timestamp or int(time.time())
+    
+    # Ensure payload is JSON string with sorted keys for deterministic signing
+    if isinstance(payload, dict):
+        payload_str = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+    else:
+        payload_str = payload
+    
+    # Create signed message: timestamp.payload
+    signed_payload = f"{ts}.{payload_str}"
+    
+    # Compute HMAC-SHA256
+    signature = hmac.new(
+        key=secret.encode('utf-8'),
+        msg=signed_payload.encode('utf-8'),
+        digestmod=hashlib.sha256
+    ).hexdigest()
+    
+    return f"t={ts},v1={signature}"
+
+def verify_webhook_signature(
+    payload: Union[dict, str],
+    signature: str,
+    secret: str,
+    tolerance_seconds: int = 300  # 5 minutes default
+) -> bool:
+    """
+    Verify a webhook signature with timestamp tolerance.
+    
+    Security checks:
+    1. Signature matches HMAC-SHA256 of timestamp.payload
+    2. Timestamp within tolerance window (prevent replay attacks)
+    3. Constant-time comparison to prevent timing attacks
+    
+    Args:
+        payload: Original payload dict or JSON string
+        signature: Signature string from sign_webhook_payload
+        secret: Same signing secret used to create signature
+        tolerance_seconds: Max age of timestamp to accept (default: 300)
+    
+    Returns:
+        True if signature is valid and timestamp is fresh, False otherwise
+    """
+    try:
+        # Parse signature header: "t=123,v1=abc"
+        parts = dict(part.split('=', 1) for part in signature.split(','))
+        if 't' not in parts or 'v1' not in parts:
+            return False
+        
+        timestamp = int(parts['t'])
+        expected_signature = parts['v1']
+        
+        # Check timestamp freshness (prevent replay attacks)
+        now = int(time.time())
+        if abs(now - timestamp) > tolerance_seconds:
+            return False
+        
+        # Re-compute expected signature
+        expected_full = sign_webhook_payload(payload, secret, timestamp)
+        expected_sig = expected_full.split(',', 1)[1].split('=', 1)[1]
+        
+        # Constant-time comparison to prevent timing attacks
+        return hmac.compare_digest(expected_sig, expected_signature)
+        
+    except (ValueError, KeyError, TypeError):
+        # Any parsing error = invalid signature
+        return False
+```
+
+## DRF PERMISSION CLASS FOR WEBHOOK ENDPOINTS
+```python
+# integrations/permissions.py
+from rest_framework import permissions
+from integrations.utils.webhooks import verify_webhook_signature
+
+class IsSignedWebhook(permissions.BasePermission):
+    """Allow requests only if webhook signature is valid"""
+    
+    def has_permission(self, request, view):
+        signature = request.headers.get('X-ScopeGuard-Signature')
+        if not signature:
+            return False
+        
+        # Get secret from organization or settings fallback
+        org = getattr(request, 'webhook_organization', None)
+        secret = org.webhook_secret if org and hasattr(org, 'webhook_secret') else settings.WEBHOOK_SECRET_FALLBACK
+        
+        # Verify signature against raw request body
+        return verify_webhook_signature(
+            payload=request.body,
+            signature=signature,
+            secret=secret,
+            tolerance_seconds=300
+        )
+```
+
+## USAGE IN WEBHOOK VIEW
+```python
+# integrations/views.py
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from integrations.permissions import IsSignedWebhook
+
+class WebhookReceiverView(APIView):
+    permission_classes = [IsSignedWebhook]
+    
+    def post(self, request):
+        # Signature already verified by permission class
+        event_type = request.headers.get('X-ScopeGuard-Event')
+        payload = request.data
+        
+        # Process event (async task recommended)
+        process_webhook_event.delay(event_type, payload, organization_id=request.webhook_organization.id)
+        
+        return Response({'status': 'received'}, status=status.HTTP_202_ACCEPTED)
+```
+
+## TEST REQUIREMENTS (pytest)
+```python
+# tests/integrations/test_webhooks.py
+import pytest
+import time
+import json
+from integrations.utils.webhooks import sign_webhook_payload, verify_webhook_signature
+
+def test_signature_roundtrip():
+    secret = "test_secret_123"
+    payload = {"event": "change_request.approved", "cr_id": "abc-123"}
+    
+    signature = sign_webhook_payload(payload, secret)
+    assert verify_webhook_signature(payload, signature, secret) is True
+
+def test_timestamp_tolerance():
+    secret = "test_secret_123"
+    payload = {"test": "data"}
+    
+    # Sign with old timestamp (outside tolerance)
+    old_ts = int(time.time()) - 600  # 10 minutes ago
+    signature = sign_webhook_payload(payload, secret, timestamp=old_ts)
+    
+    # Should fail verification (outside 300s default tolerance)
+    assert verify_webhook_signature(payload, signature, secret) is False
+    
+    # Should pass with extended tolerance
+    assert verify_webhook_signature(payload, signature, secret, tolerance_seconds=900) is True
+
+def test_tampered_payload_fails():
+    secret = "test_secret_123"
+    original_payload = {"amount": 100}
+    
+    signature = sign_webhook_payload(original_payload, secret)
+    
+    # Attacker modifies payload
+    tampered_payload = {"amount": 1000000}
+    
+    assert verify_webhook_signature(tampered_payload, signature, secret) is False
+
+def test_replay_attack_prevented():
+    secret = "test_secret_123"
+    payload = {"event": "test"}
+    
+    # Sign with current timestamp
+    signature = sign_webhook_payload(payload, secret)
+    
+    # First verification succeeds
+    assert verify_webhook_signature(payload, signature, secret) is True
+    
+    # Simulate replay after tolerance window
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("time.time", lambda: time.time() + 600)  # Fake time +10min
+        assert verify_webhook_signature(payload, signature, secret) is False
+
+def test_constant_time_comparison():
+    """Verify hmac.compare_digest is used (prevents timing attacks)"""
+    import inspect
+    source = inspect.getsource(verify_webhook_signature)
+    assert 'hmac.compare_digest' in source, "Must use constant-time comparison"
+```
+
+## FRONTEND: SENDING SIGNED WEBHOOKS (When ScopeGuard is the sender)
+```python
+# integrations/tasks.py (Celery task for sending webhooks)
+def send_signed_webhook(url: str, payload: dict, secret: str, event_type: str):
+    signature = sign_webhook_payload(payload, secret)
+    
+    headers = {
+        'Content-Type': 'application/json',
+        'X-ScopeGuard-Signature': signature,
+        'X-ScopeGuard-Event': event_type,
+        'User-Agent': 'ScopeGuard-Webhook/1.0'
+    }
+    
+    response = requests.post(
+        url,
+        json=payload,
+        headers=headers,
+        timeout=10,
+        allow_redirects=False
+    )
+    
+    # Log delivery attempt
+    WebhookDelivery.objects.create(
+        url=url,
+        event_type=event_type,
+        payload_hash=hashlib.sha256(json.dumps(payload).encode()).hexdigest(),
+        response_status=response.status_code,
+        signature_sent=signature  # For debugging, not stored long-term
+    )
+    
+    return response.status_code < 400
+```
+
+## SECURITY BEST PRACTICES TO DOCUMENT
+✅ Store webhook secrets in environment variables or Django secrets manager  
+✅ Rotate secrets periodically (provide admin UI for this in future)  
+✅ Log signature verification failures for security monitoring  
+✅ Use HTTPS for all webhook endpoints (enforce in production settings)  
+✅ Rate limit webhook receiver endpoints separately from user API  
+
+## OUTPUT FORMAT
+1. Complete `webhooks.py` with sign/verify functions + JSDoc-style docstrings
+2. Complete `permissions.py` with IsSignedWebhook DRF permission class
+3. Usage example in webhook receiver view
+4. Complete `test_webhooks.py` with roundtrip, tolerance, tampering, replay tests
+5. Security documentation: Where to store secrets, rotation strategy, monitoring tips
+6. Frontend example: Celery task for sending signed webhooks (when ScopeGuard is sender)
+
+# START: Implement sign_webhook_payload() and verify_webhook_signature() now.
+```
+
+---
+
+## 🎯 MASTER BUILD INSTRUCTIONS FOR REPLIT.AI
+
+After pasting each block above, use this follow-up prompt to ensure quality:
+
+```markdown
+# QUALITY GATE: After implementing [FUNCTION NAME]
+
+Before proceeding, verify:
+
+✅ Type hints: All parameters and return values have PEP 484/TypeScript types
+✅ Tests: pytest/Vitest tests cover success, failure, and edge cases
+✅ Integration: Show how this function plugs into existing ScopeGuard code
+✅ Performance: Note time complexity and any database indexes required
+✅ Security: Highlight any input validation, sanitization, or crypto considerations
+✅ Documentation: Include docstring with Args/Returns/Raises + usage example
+
+If any item is missing, revise the implementation before moving to the next function.
+
+# NEXT: Confirm completion of [FUNCTION NAME] and await next prompt.
+```
+
+---
+
+## 📦 FINAL DELIVERY CHECKLIST
+
+After implementing all 8 functions:
+
+- [ ] Run `pytest --cov=scopeguard` → target >90% coverage on utils modules
+- [ ] Run `npm run test:unit` → all Vitest tests passing
+- [ ] Run `python manage.py check --deploy` → no security warnings
+- [ ] Load test `build_compliant_queryset` with 10k records → <500ms response
+- [ ] Verify `optimisticMutation` rollback works with simulated API failure
+- [ ] Confirm webhook signatures verify across timezone boundaries
+- [ ] Document all 8 functions in `/docs/core-functions.md` for team onboarding
+
+---
+
+**You now have production-grade, copy-paste ready prompts for the 8 functions that make ScopeGuard professional**. 
+
+Build in order. Test each function. Integrate incrementally. 
+
+This is how enterprise SaaS is built: not with more features, but with deeper, harder, more reliable primitives.
+
+Go ship. 🚀

@@ -15,5 +15,5 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   }
 
   (req as any).user = user;
-  next();
+  return next();
 }

@@ -3,7 +3,8 @@ import { db } from "@workspace/db";
 import { webhooksTable, webhookDeliveriesTable } from "@workspace/db";
 import { and, eq, desc } from "drizzle-orm";
 import { z } from "zod";
-import { createHmac, randomBytes } from "crypto";
+import { randomBytes } from "crypto";
+import { signWebhookPayload, verifyWebhookSignature } from "../lib/webhookSigning";
 import { requireAuth } from "../middlewares/auth";
 
 const router: IRouter = Router();
@@ -125,8 +126,9 @@ export async function fireWebhookEvent(organizationId: string, eventType: string
 }
 
 async function deliverWebhook(hook: typeof webhooksTable.$inferSelect, eventType: string, payload: Record<string, unknown>) {
-  const body = JSON.stringify({ event: eventType, timestamp: new Date().toISOString(), ...payload });
-  const sig = createHmac("sha256", hook.secret).update(body).digest("hex");
+  const fullPayload = { event: eventType, timestamp: new Date().toISOString(), ...payload };
+  const body = JSON.stringify(fullPayload);
+  const sig = signWebhookPayload(fullPayload, hook.secret);
 
   let responseStatus: number | null = null;
   let responseBody = "";
@@ -137,7 +139,7 @@ async function deliverWebhook(hook: typeof webhooksTable.$inferSelect, eventType
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-ScopeGuard-Signature": `sha256=${sig}`,
+        "X-ScopeGuard-Signature": sig,
         "X-ScopeGuard-Event": eventType,
         "User-Agent": "ScopeGuard-Webhook/1.0",
       },

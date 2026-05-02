@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { useDebouncedFilter } from "@/hooks/use-debounced-filter";
 import {
   getListChangeRequestsQueryOptions,
   getListChangeRequestsQueryKey,
@@ -130,8 +131,12 @@ export default function ChangeRequests() {
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("ALL");
+  const { filters, apply: applyFilter } = useDebouncedFilter(
+    { search: "", status: "ALL" },
+    { delay: 300, excludeFromUrl: ["search"] },
+  );
+  const search = (filters.search as string) ?? "";
+  const statusFilter = (filters.status as string) ?? "ALL";
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
 
@@ -228,9 +233,9 @@ export default function ChangeRequests() {
       <div className="flex gap-3 flex-wrap">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search change orders…" className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <Input placeholder="Search change orders…" className="pl-9" value={search} onChange={(e) => applyFilter({ search: e.target.value })} />
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
+        <Select value={statusFilter} onValueChange={(v) => applyFilter({ status: v })}>
           <SelectTrigger className="w-40">
             <SelectValue />
           </SelectTrigger>
