@@ -3,20 +3,33 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: ScopeGuard API specification - change order approval workflow for agencies
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication operations
+  - name: organizations
+    description: Organization management
+  - name: client-contacts
+    description: Client contact management
+  - name: projects
+    description: Project management
+  - name: change-requests
+    description: Change request workflow
+  - name: approval
+    description: Public approval flow (no auth required)
+  - name: dashboard
+    description: Dashboard and summary data
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +37,588 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  # AUTH
+  /auth/register:
+    post:
+      operationId: register
+      tags: [auth]
+      summary: Register a new user and organization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterBody"
+      responses:
+        "201":
+          description: Registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Email already in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginBody"
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout current session
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                required: [message]
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Get current authenticated user
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ORGANIZATIONS
+  /organizations/me:
+    get:
+      operationId: getMyOrganization
+      tags: [organizations]
+      summary: Get current user's organization
+      responses:
+        "200":
+          description: Organization details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+    patch:
+      operationId: updateMyOrganization
+      tags: [organizations]
+      summary: Update current user's organization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrganizationBody"
+      responses:
+        "200":
+          description: Updated organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+
+  # CLIENT CONTACTS
+  /client-contacts:
+    get:
+      operationId: listClientContacts
+      tags: [client-contacts]
+      summary: List all client contacts for current org
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of client contacts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ClientContact"
+    post:
+      operationId: createClientContact
+      tags: [client-contacts]
+      summary: Create a new client contact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClientContactBody"
+      responses:
+        "201":
+          description: Created client contact
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientContact"
+        "409":
+          description: Contact with this email already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /client-contacts/{id}:
+    get:
+      operationId: getClientContact
+      tags: [client-contacts]
+      summary: Get a single client contact
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Client contact
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientContact"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateClientContact
+      tags: [client-contacts]
+      summary: Update a client contact
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateClientContactBody"
+      responses:
+        "200":
+          description: Updated client contact
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientContact"
+    delete:
+      operationId: deleteClientContact
+      tags: [client-contacts]
+      summary: Delete a client contact
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  # PROJECTS
+  /projects:
+    get:
+      operationId: listProjects
+      tags: [projects]
+      summary: List all projects for current org
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ACTIVE, COMPLETED, ARCHIVED]
+      responses:
+        "200":
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Project"
+    post:
+      operationId: createProject
+      tags: [projects]
+      summary: Create a new project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectBody"
+      responses:
+        "201":
+          description: Created project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+
+  /projects/{id}:
+    get:
+      operationId: getProject
+      tags: [projects]
+      summary: Get a single project with change requests
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Project with change requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateProject
+      tags: [projects]
+      summary: Update a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectBody"
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+    delete:
+      operationId: deleteProject
+      tags: [projects]
+      summary: Archive a project (soft delete)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Archived
+
+  /projects/{id}/export:
+    get:
+      operationId: exportProjectCsv
+      tags: [projects]
+      summary: Export approved change requests as CSV
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: CSV file
+          content:
+            text/csv:
+              schema:
+                type: string
+
+  # CHANGE REQUESTS
+  /change-requests:
+    get:
+      operationId: listChangeRequests
+      tags: [change-requests]
+      summary: List all change requests for current org
+      parameters:
+        - name: projectId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [DRAFT, SENT, APPROVED, REJECTED, REVISED]
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of change requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChangeRequest"
+    post:
+      operationId: createChangeRequest
+      tags: [change-requests]
+      summary: Create a new change request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateChangeRequestBody"
+      responses:
+        "201":
+          description: Created change request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangeRequest"
+
+  /change-requests/{id}:
+    get:
+      operationId: getChangeRequest
+      tags: [change-requests]
+      summary: Get a single change request
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Change request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangeRequest"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateChangeRequest
+      tags: [change-requests]
+      summary: Update a change request (only DRAFT/REVISED)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateChangeRequestBody"
+      responses:
+        "200":
+          description: Updated change request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangeRequest"
+    delete:
+      operationId: deleteChangeRequest
+      tags: [change-requests]
+      summary: Delete a change request (only DRAFT)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /change-requests/{id}/send:
+    post:
+      operationId: sendChangeRequest
+      tags: [change-requests]
+      summary: Send a change request to the client (transitions to SENT)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Change request sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangeRequest"
+        "400":
+          description: Invalid state transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # PUBLIC APPROVAL (no auth required)
+  /approve/{token}:
+    get:
+      operationId: getApprovalRequest
+      tags: [approval]
+      summary: Get public change request details by approval token
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Public change request details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicChangeRequest"
+        "404":
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: submitApproval
+      tags: [approval]
+      summary: Submit approval decision (approve, reject, or request revision)
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitApprovalBody"
+      responses:
+        "200":
+          description: Decision recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalResponse"
+        "400":
+          description: Invalid decision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # DASHBOARD
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Get dashboard summary statistics for current org
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  /dashboard/recent-activity:
+    get:
+      operationId: getRecentActivity
+      tags: [dashboard]
+      summary: Get recent change request activity feed
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        "200":
+          description: Recent activity
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ActivityItem"
+
 components:
   schemas:
     HealthStatus:
@@ -31,6 +626,415 @@ components:
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+          required: [code, message]
+      required: [error]
+
+    # AUTH SCHEMAS
+    RegisterBody:
+      type: object
+      properties:
+        organizationName:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+      required: [organizationName, name, email, password]
+
+    LoginBody:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required: [email, password]
+
+    AuthResponse:
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        organization:
+          $ref: "#/components/schemas/Organization"
+      required: [user, organization]
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [ADMIN, PROJECT_MANAGER]
+        organizationId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, email, role, organizationId, createdAt]
+
+    # ORGANIZATION SCHEMAS
+    Organization:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        logoUrl:
+          type: string
+          nullable: true
+        primaryColor:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, slug, createdAt]
+
+    UpdateOrganizationBody:
+      type: object
+      properties:
+        name:
+          type: string
+        logoUrl:
+          type: string
+          nullable: true
+        primaryColor:
+          type: string
+          nullable: true
+
+    # CLIENT CONTACT SCHEMAS
+    ClientContact:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        company:
+          type: string
+        organizationId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, email, company, organizationId, createdAt]
+
+    CreateClientContactBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        company:
+          type: string
+      required: [name, email]
+
+    UpdateClientContactBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        company:
+          type: string
+
+    # PROJECT SCHEMAS
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, COMPLETED, ARCHIVED]
+        hourlyRateCents:
+          type: integer
+          description: Hourly rate stored in cents
+        organizationId:
+          type: string
+        clientContactId:
+          type: string
+        clientName:
+          type: string
+        clientEmail:
+          type: string
+        clientCompany:
+          type: string
+        totalApprovedCents:
+          type: integer
+          description: Sum of all approved change request totals in cents
+        changeRequestCount:
+          type: integer
+        pendingCount:
+          type: integer
+        approvedCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, name, description, status, hourlyRateCents, organizationId, clientContactId, clientName, clientEmail, clientCompany, totalApprovedCents, changeRequestCount, pendingCount, approvedCount, createdAt, updatedAt]
+
+    ProjectDetail:
+      allOf:
+        - $ref: "#/components/schemas/Project"
+        - type: object
+          properties:
+            changeRequests:
+              type: array
+              items:
+                $ref: "#/components/schemas/ChangeRequest"
+          required: [changeRequests]
+
+    CreateProjectBody:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        clientContactId:
+          type: string
+        hourlyRateCents:
+          type: integer
+          minimum: 0
+      required: [name, clientContactId, hourlyRateCents]
+
+    UpdateProjectBody:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        clientContactId:
+          type: string
+        hourlyRateCents:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+          enum: [ACTIVE, COMPLETED, ARCHIVED]
+
+    # CHANGE REQUEST SCHEMAS
+    ChangeRequest:
+      type: object
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        projectName:
+          type: string
+        clientName:
+          type: string
+        clientEmail:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        estimatedHours:
+          type: number
+        hourlyRateCents:
+          type: integer
+        totalCents:
+          type: integer
+        status:
+          type: string
+          enum: [DRAFT, SENT, APPROVED, REJECTED, REVISED]
+        deadline:
+          type: string
+          format: date
+          nullable: true
+        approvalToken:
+          type: string
+        approvedAt:
+          type: string
+          format: date-time
+          nullable: true
+        clientComments:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, projectId, projectName, clientName, clientEmail, title, description, estimatedHours, hourlyRateCents, totalCents, status, approvalToken, clientComments, createdAt, updatedAt]
+
+    CreateChangeRequestBody:
+      type: object
+      properties:
+        projectId:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        estimatedHours:
+          type: number
+          minimum: 0
+        deadline:
+          type: string
+          format: date
+          nullable: true
+      required: [projectId, title, description, estimatedHours]
+
+    UpdateChangeRequestBody:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        estimatedHours:
+          type: number
+          minimum: 0
+        deadline:
+          type: string
+          format: date
+          nullable: true
+
+    # PUBLIC APPROVAL SCHEMAS
+    PublicChangeRequest:
+      type: object
+      properties:
+        projectName:
+          type: string
+        organizationName:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        totalCents:
+          type: integer
+        totalFormatted:
+          type: string
+        deadline:
+          type: string
+          format: date
+          nullable: true
+        logoUrl:
+          type: string
+          nullable: true
+        primaryColor:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [DRAFT, SENT, APPROVED, REJECTED, REVISED]
+      required: [projectName, organizationName, title, description, totalCents, totalFormatted, status]
+
+    SubmitApprovalBody:
+      type: object
+      properties:
+        decision:
+          type: string
+          enum: [approve, reject, revise]
+        comments:
+          type: string
+      required: [decision]
+
+    ApprovalResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        message:
+          type: string
+      required: [status, message]
+
+    # DASHBOARD SCHEMAS
+    DashboardSummary:
+      type: object
+      properties:
+        totalProjects:
+          type: integer
+        activeProjects:
+          type: integer
+        totalChangeRequests:
+          type: integer
+        pendingApproval:
+          type: integer
+        approvedThisMonth:
+          type: integer
+        totalApprovedCents:
+          type: integer
+        totalApprovedFormatted:
+          type: string
+        draftCount:
+          type: integer
+        sentCount:
+          type: integer
+        approvedCount:
+          type: integer
+        rejectedCount:
+          type: integer
+        revisedCount:
+          type: integer
+      required: [totalProjects, activeProjects, totalChangeRequests, pendingApproval, approvedThisMonth, totalApprovedCents, totalApprovedFormatted, draftCount, sentCount, approvedCount, rejectedCount, revisedCount]
+
+    ActivityItem:
+      type: object
+      properties:
+        id:
+          type: string
+        changeRequestId:
+          type: string
+        changeRequestTitle:
+          type: string
+        projectName:
+          type: string
+        clientName:
+          type: string
+        action:
+          type: string
+          enum: [CREATED, SENT, APPROVED, REJECTED, REVISED, UPDATED]
+        totalCents:
+          type: integer
+        totalFormatted:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, changeRequestId, changeRequestTitle, projectName, clientName, action, totalCents, totalFormatted, createdAt]

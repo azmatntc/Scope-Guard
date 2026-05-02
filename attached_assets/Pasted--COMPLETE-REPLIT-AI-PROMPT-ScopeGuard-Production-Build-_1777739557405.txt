@@ -1,0 +1,1167 @@
+# 🚀 COMPLETE REPLIT.AI PROMPT: ScopeGuard Production Build
+
+*Copy everything below this line and paste directly into Replit.ai*
+
+```markdown
+# ROLE & STACK DEFINITION
+You are a senior full-stack architect building a production-grade SaaS application called "ScopeGuard" – a change order approval workflow for agencies and consultancies.
+
+## REQUIRED TECH STACK
+- Backend: Django 5.2 + Django REST Framework 3.15+
+- Database: PostgreSQL 15+ with proper indexing, foreign keys, JSONB for extensibility
+- Frontend: Svelte 5 (Runes) + Vite + Tailwind CSS 4
+- DevOps: GitHub Actions CI/CD, Docker-ready, environment-based configuration
+- Testing: pytest + pytest-django + factory_boy (backend), Vitest + @testing-library/svelte (frontend)
+
+## GLOBAL CODING STANDARDS (ENFORCE IN ALL OUTPUTS)
+✅ Type hints everywhere: Python (PEP 484) + TypeScript strict mode
+✅ Environment variables: python-decouple + .env.example template provided
+✅ PostgreSQL: Use select_related/prefetch_related, transaction.atomic(), custom managers for query optimization
+✅ DRF: ViewSets with permission classes, throttling, pagination, OpenAPI schema via drf-spectacular
+✅ Svelte: Component-based architecture using $state/$derived runes, stores for auth state, proper prop typing
+✅ Tailwind: Utility-first CSS, dark mode support via class strategy, mobile-first responsive design
+✅ Security: CSRF protection, CORS configuration, rate limiting, SQL injection prevention, bcrypt password hashing
+✅ Logging: Structured JSON logs with request_id correlation for debugging
+✅ Error handling: Global DRF exception handler returning { error: { code, message, details } } + user-friendly frontend toasts
+
+## OUTPUT FORMAT FOR EACH FEATURE
+When I request a feature, provide in this exact order:
+1. Database schema (models.py with migration notes and indexes)
+2. API specification (serializers.py + views.py endpoints with HTTP methods)
+3. Frontend component structure (Svelte file names + props + state logic)
+4. Key business logic with edge case handling (Python functions with docstrings)
+5. Test cases (critical paths + error states for pytest and Vitest)
+6. Required environment variables (.env.example entries)
+7. Deployment notes specific to Replit (if applicable)
+
+---
+
+# PRODUCT SPECIFICATION: ScopeGuard MVP
+
+## CORE USER STORY
+"As an Agency Project Manager billing $150/hr, I need to document a client's 'quick tweak' request, price it at $450, send a one-click approval link via email, and track sign-off—so I can bill for scope changes immediately and protect my project margins from creeping scope."
+
+## TARGET USER PERSONAS
+1. **Agency PM (Primary)**: Creates change requests, tracks approvals, exports for invoicing
+2. **Agency Admin**: Manages team seats, billing, organization settings
+3. **Client Contact (External)**: Receives approval links, approves/rejects changes (no login required)
+
+## MVP FEATURE SET (BUILD IN THIS EXACT ORDER)
+
+### PHASE 1: FOUNDATION (Week 1)
+#### 1.1 Authentication & Multi-Tenancy
+- Django allauth for email/password signup + JWT tokens via djangorestframework-simplejwt
+- Organization-based tenancy: all data scoped to organization_id
+- Roles: 
+  - `ADMIN`: Full access + billing/settings
+  - `PROJECT_MANAGER`: Create/edit projects & change requests
+  - `CLIENT_VIEWER`: Token-based, read-only approval access (no password)
+- Models:
+```python
+# organizations/models.py
+from django.db import models
+from django.contrib.auth.models import AbstractUser
+import uuid
+
+class Organization(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255)
+    slug = models.SlugField(unique=True, max_length=100)  # for URL routing
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    branding = models.JSONField(default=dict, blank=True)  # { "logo_url": str, "primary_color": "#hex" }
+    
+    class Meta:
+        indexes = [models.Index(fields=['slug'])]
+
+class User(AbstractUser):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='users')
+    role = models.CharField(
+        max_length=20,
+        choices=[('ADMIN', 'Admin'), ('PROJECT_MANAGER', 'Project Manager')],
+        default='PROJECT_MANAGER'
+    )
+    phone = models.CharField(max_length=20, blank=True)
+    
+    class Meta:
+        indexes = [models.Index(fields=['organization', 'role'])]
+
+class ClientContact(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='client_contacts')
+    email = models.EmailField(db_index=True)
+    name = models.CharField(max_length=255)
+    company = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['organization', 'email'], name='unique_org_client_email')
+        ]
+        indexes = [models.Index(fields=['organization', 'email'])]
+```
+
+#### 1.2 Project Management CRUD
+- Models:
+```python
+# projects/models.py
+class Project(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='projects')
+    client_contact = models.ForeignKey(ClientContact, on_delete=models.PROTECT, related_name='projects')
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    hourly_rate_cents = models.PositiveIntegerField(help_text="Store in cents for precision")
+    status = models.CharField(
+        max_length=20,
+        choices=[('ACTIVE', 'Active'), ('COMPLETED', 'Completed'), ('ARCHIVED', 'Archived')],
+        default='ACTIVE'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['organization', 'status']),
+            models.Index(fields=['client_contact', 'status'])
+        ]
+    
+    def __str__(self):
+        return f"{self.name} ({self.client_contact.name})"
+```
+
+- DRF Serializers (projects/serializers.py):
+```python
+from rest_framework import serializers
+from .models import Project
+
+class ProjectSerializer(serializers.ModelSerializer):
+    client_name = serializers.CharField(source='client_contact.name', read_only=True)
+    client_email = serializers.EmailField(source='client_contact.email', read_only=True)
+    hourly_rate = serializers.DecimalField(max_digits=10, decimal_places=2, source='hourly_rate_cents', write_only=True)
+    
+    class Meta:
+        model = Project
+        fields = ['id', 'name', 'description', 'client_contact', 'client_name', 'client_email', 
+                 'hourly_rate', 'hourly_rate_cents', 'status', 'created_at', 'updated_at']
+        read_only_fields = ['organization', 'created_at', 'updated_at']
+    
+    def validate_hourly_rate(self, value):
+        if value < 0:
+            raise serializers.ValidationError("Hourly rate cannot be negative")
+        return value
+```
+
+- DRF ViewSet (projects/views.py):
+```python
+from rest_framework import viewsets, permissions, filters
+from .models import Project
+from .serializers import ProjectSerializer
+
+class IsOrganizationMember(permissions.BasePermission):
+    def has_object_permission(self, request, view, obj):
+        return obj.organization == request.user.organization
+
+class ProjectViewSet(viewsets.ModelViewSet):
+    serializer_class = ProjectSerializer
+    permission_classes = [permissions.IsAuthenticated, IsOrganizationMember]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'client_contact__name', 'client_contact__email']
+    ordering_fields = ['created_at', 'name', 'status']
+    
+    def get_queryset(self):
+        return Project.objects.select_related('client_contact').filter(
+            organization=self.request.user.organization
+        ).prefetch_related('change_requests')
+    
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.user.organization)
+```
+
+### PHASE 2: CHANGE REQUEST WORKFLOW (Week 2)
+#### 2.1 Change Request Model & State Machine
+```python
+# change_requests/models.py
+from django.db import models
+from django.utils import timezone
+import uuid
+from projects.models import Project
+
+class ChangeRequest(models.Model):
+    STATUS_CHOICES = [
+        ('DRAFT', 'Draft'),
+        ('SENT', 'Sent to Client'),
+        ('APPROVED', 'Approved'),
+        ('REJECTED', 'Rejected'),
+        ('REVISED', 'Revision Requested'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='change_requests')
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+    estimated_hours = models.DecimalField(max_digits=6, decimal_places=2)
+    hourly_rate_cents = models.PositiveIntegerField()  # Snapshot at creation time
+    total_cents = models.PositiveIntegerField(editable=False)  # Auto-calculated
+    deadline = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
+    approval_token = models.UUIDField(unique=True, default=uuid.uuid4, editable=False, db_index=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approved_by_ip = models.GenericIPAddressField(null=True, blank=True)
+    client_comments = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['project', 'status']),
+            models.Index(fields=['approval_token']),
+            models.Index(fields=['organization', 'created_at']),  # via project__organization
+        ]
+    
+    def save(self, *args, **kwargs):
+        # Auto-calculate total on save
+        if self.estimated_hours and self.hourly_rate_cents:
+            self.total_cents = int(float(self.estimated_hours) * self.hourly_rate_cents)
+        super().save(*args, **kwargs)
+    
+    @property
+    def total_formatted(self):
+        return f"${self.total_cents / 100:.2f}"
+    
+    @property
+    def organization(self):
+        return self.project.organization
+```
+
+#### 2.2 State Machine Logic (Django Signals)
+```python
+# change_requests/signals.py
+from django.db.models.signals import pre_save, post_save
+from django.dispatch import receiver
+from django.core.mail import send_mail
+from django.conf import settings
+from .models import ChangeRequest
+
+@receiver(pre_save, sender=ChangeRequest)
+def validate_status_transitions(sender, instance, **kwargs):
+    """Prevent invalid state transitions"""
+    if instance.pk:  # Updating existing
+        old_instance = ChangeRequest.objects.get(pk=instance.pk)
+        valid_transitions = {
+            'DRAFT': ['SENT', 'DRAFT'],
+            'SENT': ['APPROVED', 'REJECTED', 'REVISED', 'SENT'],
+            'REVISED': ['SENT', 'DRAFT'],
+            'APPROVED': ['APPROVED'],  # Locked
+            'REJECTED': ['DRAFT', 'REVISED'],
+        }
+        if instance.status not in valid_transitions.get(old_instance.status, []):
+            raise ValueError(f"Invalid transition: {old_instance.status} → {instance.status}")
+
+@receiver(post_save, sender=ChangeRequest)
+def send_approval_email(sender, instance, created, **kwargs):
+    """Send email when change request is sent to client"""
+    if instance.status == 'SENT' and (created or instance.status != instance._state.fields_cache.get('status')):
+        approval_url = f"{settings.FRONTEND_URL}/approve/{instance.approval_token}"
+        subject = f"Action Required: Approve scope change for {instance.project.name}"
+        message = f"""
+        Hi {instance.project.client_contact.name},
+        
+        {instance.project.organization.name} has requested approval for a scope change:
+        
+        Title: {instance.title}
+        Description: {instance.description}
+        Estimated Cost: ${instance.total_cents / 100:.2f}
+        Deadline: {instance.deadline or 'None'}
+        
+        Review and approve here: {approval_url}
+        
+        This link expires in 14 days.
+        """
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[instance.project.client_contact.email],
+            fail_silently=False,
+        )
+```
+
+#### 2.3 Approval Endpoint (Public, Token-Based)
+```python
+# change_requests/views.py (add to existing file)
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework import status
+from django.utils import timezone
+from .models import ChangeRequest
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([AllowAny])
+def public_approval_view(request, token):
+    """Public endpoint for client approval - no auth required"""
+    try:
+        change_request = ChangeRequest.objects.select_related('project__client_contact').get(
+            approval_token=token,
+            status='SENT'
+        )
+    except ChangeRequest.DoesNotExist:
+        return Response(
+            {'error': {'code': 'NOT_FOUND', 'message': 'Invalid or expired approval link'}},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    if request.method == 'GET':
+        # Return minimal public data
+        return Response({
+            'project_name': change_request.project.name,
+            'organization_name': change_request.project.organization.name,
+            'title': change_request.title,
+            'description': change_request.description,
+            'total_formatted': change_request.total_formatted,
+            'deadline': change_request.deadline,
+            'branding': change_request.project.organization.branding
+        })
+    
+    elif request.method == 'PATCH':
+        decision = request.data.get('decision')  # 'approve', 'reject', 'revise'
+        comments = request.data.get('comments', '')
+        
+        if decision == 'approve':
+            change_request.status = 'APPROVED'
+            change_request.approved_at = timezone.now()
+            change_request.approved_by_ip = request.META.get('REMOTE_ADDR')
+            change_request.client_comments = comments
+            change_request.save(update_fields=['status', 'approved_at', 'approved_by_ip', 'client_comments'])
+            
+            # TODO: Trigger Slack webhook if configured (stub for MVP)
+            
+            return Response({'status': 'approved', 'message': 'Change request approved successfully'})
+        
+        elif decision == 'reject':
+            change_request.status = 'REJECTED'
+            change_request.client_comments = comments
+            change_request.save(update_fields=['status', 'client_comments'])
+            return Response({'status': 'rejected', 'message': 'Change request rejected'})
+        
+        elif decision == 'revise':
+            change_request.status = 'REVISED'
+            change_request.client_comments = comments
+            change_request.save(update_fields=['status', 'client_comments'])
+            return Response({'status': 'revised', 'message': 'Revision requested - PM will follow up'})
+        
+        else:
+            return Response(
+                {'error': {'code': 'INVALID_DECISION', 'message': 'Decision must be approve, reject, or revise'}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+```
+
+### PHASE 3: FRONTEND COMPONENTS (Week 3)
+#### 3.1 Svelte Component Structure
+```
+src/
+├── lib/
+│   ├── api/
+│   │   ├── client.ts          # Axios instance with auth interceptors
+│   │   ├── projects.ts        # API calls for projects
+│   │   └── changeRequests.ts  # API calls for change requests
+│   ├── stores/
+│   │   ├── auth.store.ts      # Svelte store for user session
+│   │   └── ui.store.ts        # Toast notifications, modal state
+│   ├── components/
+│   │   ├── ui/
+│   │   │   ├── Button.svelte
+│   │   │   ├── Modal.svelte
+│   │   │   ├── Toast.svelte
+│   │   │   └── Badge.svelte   # Status badges with Tailwind variants
+│   │   ├── projects/
+│   │   │   ├── ProjectList.svelte
+│   │   │   ├── ProjectForm.svelte
+│   │   │   └── ProjectCard.svelte
+│   │   ├── change-requests/
+│   │   │   ├── ChangeRequestList.svelte   # Filterable table with status badges
+│   │   │   ├── CreateChangeRequestModal.svelte  # Form with live total calc
+│   │   │   ├── ChangeRequestDetail.svelte # Detail view with timeline
+│   │   │   └── ApprovalTimeline.svelte    # Visual history of status changes
+│   │   └── public/
+│   │       └── ClientApprovalPage.svelte  # Zero-login approval UI
+│   └── utils/
+│       ├── currency.ts        # Format cents to USD
+│       ├── dates.ts           # Format deadlines, relative time
+│       └── validation.ts      # Form validation helpers
+├── routes/
+│   ├── +layout.svelte         # Auth check, sidebar navigation
+│   ├── +page.svelte           # Dashboard redirect
+│   ├── projects/
+│   │   ├── +page.svelte       # Project list view
+│   │   └── [projectId]/
+│   │       ├── +page.svelte   # Project detail + change requests tab
+│   │       └── +layout.svelte # Project-specific layout
+│   └── approve/
+│       └── [token]/
+│           └── +page.svelte   # Public approval page (no auth layout)
+└── app.css                    # Tailwind imports + custom utilities
+```
+
+#### 3.2 Key Component: CreateChangeRequestModal.svelte
+```svelte
+<!-- src/lib/components/change-requests/CreateChangeRequestModal.svelte -->
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { fade } from 'svelte/transition';
+  import { api } from '$lib/api/client';
+  import { toast } from '$lib/stores/ui.store';
+  
+  // Props
+  export let projectId: string;
+  export let hourlyRateCents: number;
+  export let onClose: () => void;
+  
+  // Reactive state using Svelte 5 runes
+  let title = $state('');
+  let description = $state('');
+  let estimatedHours = $state('');
+  let deadline = $state('');
+  let isSubmitting = $state(false);
+  
+  // Derived state: auto-calculate total
+  let totalFormatted = $derived(() => {
+    const hours = parseFloat(estimatedHours) || 0;
+    const totalCents = hours * hourlyRateCents;
+    return `$${(totalCents / 100).toFixed(2)}`;
+  });
+  
+  // Validation
+  let errors = $state<Record<string, string>>({});
+  
+  const validate = () => {
+    errors = {};
+    if (!title.trim()) errors.title = 'Title is required';
+    if (!description.trim()) errors.description = 'Description is required';
+    if (!estimatedHours || parseFloat(estimatedHours) <= 0) {
+      errors.estimatedHours = 'Enter valid hours';
+    }
+    return Object.keys(errors).length === 0;
+  };
+  
+  const handleSubmit = async () => {
+    if (!validate()) return;
+    
+    isSubmitting = true;
+    try {
+      await api.post(`/change-requests/`, {
+        project: projectId,
+        title: title.trim(),
+        description: description.trim(),
+        estimated_hours: parseFloat(estimatedHours),
+        hourly_rate_cents: hourlyRateCents,
+        deadline: deadline || null,
+        status: 'DRAFT'
+      });
+      
+      toast.success('Change request created! Send to client when ready.');
+      onClose();
+    } catch (err: any) {
+      toast.error(err.response?.data?.error?.message || 'Failed to create request');
+    } finally {
+      isSubmitting = false;
+    }
+  };
+  
+  // Close on Escape key
+  onMount(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  });
+</script>
+
+<div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" in:fade>
+  <div class="w-full max-w-lg bg-white dark:bg-gray-800 rounded-xl shadow-2xl overflow-hidden">
+    <!-- Header -->
+    <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white">New Scope Change</h3>
+      <p class="text-sm text-gray-500 dark:text-gray-400">Project: {projectId}</p>
+    </div>
+    
+    <!-- Form -->
+    <form on:submit|preventDefault={handleSubmit} class="p-6 space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          Title *
+        </label>
+        <input 
+          type="text" 
+          bind:value={title}
+          class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg 
+                 focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                 dark:bg-gray-700 dark:text-white"
+          placeholder="e.g., Add user export feature"
+        />
+        {#if errors.title}
+          <p class="mt-1 text-sm text-red-600">{errors.title}</p>
+        {/if}
+      </div>
+      
+      <div>
+        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          Description *
+        </label>
+        <textarea 
+          bind:value={description}
+          rows="3"
+          class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg 
+                 focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                 dark:bg-gray-700 dark:text-white"
+          placeholder="Describe the scope change in detail..."
+        />
+        {#if errors.description}
+          <p class="mt-1 text-sm text-red-600">{errors.description}</p>
+        {/if}
+      </div>
+      
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Estimated Hours *
+          </label>
+          <input 
+            type="number" 
+            step="0.25"
+            min="0"
+            bind:value={estimatedHours}
+            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg 
+                   focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                   dark:bg-gray-700 dark:text-white"
+            placeholder="2.5"
+          />
+          {#if errors.estimatedHours}
+            <p class="mt-1 text-sm text-red-600">{errors.estimatedHours}</p>
+          {/if}
+        </div>
+        
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Deadline
+          </label>
+          <input 
+            type="date" 
+            bind:value={deadline}
+            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg 
+                   focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                   dark:bg-gray-700 dark:text-white"
+          />
+        </div>
+      </div>
+      
+      <!-- Live Total Preview -->
+      <div class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+        <p class="text-sm text-blue-800 dark:text-blue-200">
+          <span class="font-medium">Estimated Cost:</span> {totalFormatted}
+          <span class="text-xs ml-2 opacity-75">(at ${(hourlyRateCents/100).toFixed(2)}/hr)</span>
+        </p>
+      </div>
+      
+      <!-- Actions -->
+      <div class="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <button 
+          type="button"
+          on:click={onClose}
+          disabled={isSubmitting}
+          class="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 
+                 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+        >
+          Cancel
+        </button>
+        <button 
+          type="submit"
+          disabled={isSubmitting}
+          class="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 
+                 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {isSubmitting ? 'Creating...' : 'Create Draft'}
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+```
+
+#### 3.3 Key Component: ClientApprovalPage.svelte (Public, Zero-Login)
+```svelte
+<!-- src/routes/approve/[token]/+page.svelte -->
+<script lang="ts">
+  import { page } from '$app/state';
+  import { api } from '$lib/api/client'; // Unauthenticated instance
+  import { toast } from '$lib/stores/ui.store';
+  
+  // Load data from endpoint (SSR compatible)
+  let data = $props<{ 
+    project_name: string;
+    organization_name: string;
+    title: string;
+    description: string;
+    total_formatted: string;
+    deadline: string | null;
+    branding: { logo_url?: string; primary_color?: string };
+  }>();
+  
+  let decision = $state<'approve' | 'reject' | 'revise' | null>(null);
+  let comments = $state('');
+  let isSubmitting = $state(false);
+  let isSubmitted = $state(false);
+  
+  const handleSubmit = async () => {
+    if (!decision) {
+      toast.error('Please select an option');
+      return;
+    }
+    
+    isSubmitting = true;
+    try {
+      await api.patch(`/change-requests/approve/${page.params.token}/`, {
+        decision,
+        comments: comments.trim()
+      });
+      
+      isSubmitted = true;
+      toast.success('Your response has been recorded');
+    } catch (err: any) {
+      toast.error(err.response?.data?.error?.message || 'Submission failed');
+    } finally {
+      isSubmitting = false;
+    }
+  };
+  
+  // Dynamic branding: apply client's primary color to buttons
+  $: buttonClass = data?.branding?.primary_color 
+    ? `bg-[${data.branding.primary_color}] hover:opacity-90` 
+    : 'bg-blue-600 hover:bg-blue-700';
+</script>
+
+<div class="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
+  {#if isSubmitted}
+    <!-- Success State -->
+    <div class="max-w-md w-full bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 text-center">
+      <div class="w-16 h-16 mx-auto mb-4 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center">
+        <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+        </svg>
+      </div>
+      <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-2">Thank You!</h2>
+      <p class="text-gray-600 dark:text-gray-400 mb-6">
+        Your {decision} response for "{data?.title}" has been received.
+        {#if comments}<br/><span class="text-sm italic">"{comments}"</span>{/if}
+      </p>
+      <p class="text-sm text-gray-500">
+        {data?.organization_name} will follow up shortly.
+      </p>
+    </div>
+    
+  {:else}
+    <!-- Approval Form -->
+    <div class="max-w-2xl w-full bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden">
+      <!-- Header with optional branding -->
+      {#if data?.branding?.logo_url}
+        <div class="bg-gray-50 dark:bg-gray-700/50 px-6 py-4 flex items-center gap-3">
+          <img src={data.branding.logo_url} alt="Logo" class="h-8 object-contain" />
+          <span class="text-sm text-gray-600 dark:text-gray-400">{data?.organization_name}</span>
+        </div>
+      {:else}
+        <div class="bg-blue-600 px-6 py-4">
+          <h1 class="text-white font-semibold">{data?.organization_name}</h1>
+        </div>
+      {/if}
+      
+      <div class="p-6 space-y-6">
+        <!-- Request Summary -->
+        <div>
+          <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-1">{data?.title}</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            Project: {data?.project_name}
+          </p>
+          
+          <div class="prose dark:prose-invert max-w-none text-gray-700 dark:text-gray-300">
+            {data?.description}
+          </div>
+        </div>
+        
+        <!-- Cost & Deadline -->
+        <div class="grid grid-cols-2 gap-4 p-4 bg-gray-50 dark:bg-gray-700/30 rounded-lg">
+          <div>
+            <p class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">Estimated Cost</p>
+            <p class="text-2xl font-bold text-gray-900 dark:text-white">{data?.total_formatted}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">Deadline</p>
+            <p class="text-lg font-medium text-gray-900 dark:text-white">
+              {data?.deadline ? new Date(data.deadline).toLocaleDateString() : 'None'}
+            </p>
+          </div>
+        </div>
+        
+        <!-- Decision Options -->
+        <div class="space-y-3">
+          <p class="text-sm font-medium text-gray-700 dark:text-gray-300">Your Decision:</p>
+          
+          <label class="flex items-start p-4 border border-gray-200 dark:border-gray-600 rounded-lg 
+                      cursor-pointer hover:border-blue-300 dark:hover:border-blue-500 transition-colors
+                      {decision === 'approve' ? 'ring-2 ring-blue-500 border-blue-500' : ''}">
+            <input 
+              type="radio" 
+              name="decision" 
+              value="approve"
+              bind:group={decision}
+              class="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500"
+            />
+            <div class="ml-3">
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">Approve</span>
+              <span class="block text-sm text-gray-500 dark:text-gray-400">
+                I approve this scope change and agree to the estimated cost.
+              </span>
+            </div>
+          </label>
+          
+          <label class="flex items-start p-4 border border-gray-200 dark:border-gray-600 rounded-lg 
+                      cursor-pointer hover:border-yellow-300 dark:hover:border-yellow-500 transition-colors
+                      {decision === 'revise' ? 'ring-2 ring-yellow-500 border-yellow-500' : ''}">
+            <input 
+              type="radio" 
+              name="decision" 
+              value="revise"
+              bind:group={decision}
+              class="mt-1 h-4 w-4 text-yellow-600 focus:ring-yellow-500"
+            />
+            <div class="ml-3">
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">Request Changes</span>
+              <span class="block text-sm text-gray-500 dark:text-gray-400">
+                I need to discuss details before approving.
+              </span>
+            </div>
+          </label>
+          
+          <label class="flex items-start p-4 border border-gray-200 dark:border-gray-600 rounded-lg 
+                      cursor-pointer hover:border-red-300 dark:hover:border-red-500 transition-colors
+                      {decision === 'reject' ? 'ring-2 ring-red-500 border-red-500' : ''}">
+            <input 
+              type="radio" 
+              name="decision" 
+              value="reject"
+              bind:group={decision}
+              class="mt-1 h-4 w-4 text-red-600 focus:ring-red-500"
+            />
+            <div class="ml-3">
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">Reject</span>
+              <span class="block text-sm text-gray-500 dark:text-gray-400">
+                I do not approve this scope change.
+              </span>
+            </div>
+          </label>
+        </div>
+        
+        <!-- Optional Comments -->
+        {#if decision}
+          <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Additional Comments (Optional)
+            </label>
+            <textarea 
+              bind:value={comments}
+              rows="3"
+              placeholder="Add any notes for the project manager..."
+              class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg 
+                     focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                     dark:bg-gray-700 dark:text-white"
+            />
+          </div>
+        {/if}
+        
+        <!-- Submit Button -->
+        <button 
+          on:click={handleSubmit}
+          disabled={isSubmitting || !decision}
+          class={`w-full py-3 px-4 text-white font-medium rounded-lg transition-colors 
+                 disabled:opacity-50 disabled:cursor-not-allowed ${buttonClass}`}
+        >
+          {isSubmitting ? 'Submitting...' : 'Submit Response'}
+        </button>
+        
+        <!-- Security Note -->
+        <p class="text-xs text-center text-gray-400">
+          This approval link expires in 14 days. Your IP address is logged for audit purposes.
+        </p>
+      </div>
+    </div>
+  {/if}
+</div>
+```
+
+### PHASE 4: EXPORT & INTEGRATIONS (Week 4)
+#### 4.1 CSV Export for Accounting Software
+```python
+# change_requests/views.py (add export endpoint)
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def export_change_requests_csv(request, project_id):
+    """Export approved change requests as QuickBooks-compatible CSV"""
+    from django.http import HttpResponse
+    import csv
+    import io
+    
+    # Validate project access
+    project = get_object_or_404(Project, id=project_id, organization=request.user.organization)
+    
+    # Get approved change requests
+    change_requests = ChangeRequest.objects.filter(
+        project=project,
+        status='APPROVED'
+    ).select_related('project__client_contact').order_by('approved_at')
+    
+    # Create CSV in memory
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    
+    # Header row (QuickBooks Import Format)
+    writer.writerow([
+        'Date', 'Name', 'Item', 'Description', 'Qty', 'Rate', 'Amount', 
+        'Customer:Job', 'Class', 'Memo'
+    ])
+    
+    # Data rows
+    for cr in change_requests:
+        writer.writerow([
+            cr.approved_at.strftime('%m/%d/%Y'),  # Date
+            cr.project.client_contact.name,         # Customer name
+            'Scope Change',                          # Item/service name
+            f"{cr.title}: {cr.description[:50]}...", # Description (truncated)
+            float(cr.estimated_hours),               # Quantity (hours)
+            f"{cr.hourly_rate_cents / 100:.2f}",    # Rate per hour
+            f"{cr.total_cents / 100:.2f}",          # Total amount
+            f"{cr.project.client_contact.name}: {cr.project.name}",  # Customer:Job
+            '',                                      # Class (optional)
+            f"Approved via ScopeGuard - Token: {cr.approval_token}"  # Memo/audit trail
+        ])
+    
+    # Prepare HTTP response
+    buffer.seek(0)
+    response = HttpResponse(buffer.getvalue(), content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="scopeguard_{project.slug}_export_{timezone.now().date()}.csv"'
+    return response
+```
+
+#### 4.2 Slack Notification Webhook (Optional MVP+)
+```python
+# integrations/slack.py
+import requests
+from django.conf import settings
+
+def send_slack_notification(change_request, event_type):
+    """Send Slack notification for change request events"""
+    if not change_request.project.organization.branding.get('slack_webhook_url'):
+        return
+    
+    webhook_url = change_request.project.organization.branding['slack_webhook_url']
+    
+    # Color by event type
+    colors = {
+        'approved': 'good',
+        'rejected': 'danger',
+        'revised': 'warning'
+    }
+    
+    # Emoji by event type
+    emojis = {
+        'approved': '✅',
+        'rejected': '❌',
+        'revised': '🔄'
+    }
+    
+    payload = {
+        "attachments": [
+            {
+                "color": colors.get(event_type, '#808080'),
+                "title": f"{emojis.get(event_type, '📋')} Scope Change {event_type.title()}",
+                "fields": [
+                    {"title": "Project", "value": change_request.project.name, "short": True},
+                    {"title": "Client", "value": change_request.project.client_contact.name, "short": True},
+                    {"title": "Change", "value": change_request.title, "short": False},
+                    {"title": "Value", "value": change_request.total_formatted, "short": True},
+                    {"title": "Status", "value": change_request.get_status_display(), "short": True},
+                ],
+                "footer": "ScopeGuard",
+                "ts": int(change_request.updated_at.timestamp())
+            }
+        ]
+    }
+    
+    try:
+        requests.post(webhook_url, json=payload, timeout=5)
+    except requests.RequestException:
+        # Log error but don't fail the main request
+        pass
+```
+
+---
+
+# SECURITY & PRODUCTION REQUIREMENTS (ENFORCE IN ALL CODE)
+
+## Authentication & Authorization
+✅ All PM endpoints: `permission_classes = [IsAuthenticated, IsOrganizationMember]`  
+✅ Client approval endpoint: `@permission_classes([AllowAny])` + token validation + rate limiting  
+✅ Token security: approval_token = UUID4, expires after 14 days (check in view), single-use for state changes  
+✅ Rate limiting: DRF throttling - 100 requests/hour for authenticated users, 5 submissions/hour per approval token  
+
+## Data Integrity & Audit
+✅ All financial fields stored in cents (integer) to avoid floating point errors  
+✅ `transaction.atomic()` on status changes that trigger side effects (email, Slack)  
+✅ Audit middleware: log all CREATE/UPDATE/DELETE on ChangeRequest with user_id, IP, timestamp, old/new values (JSONB)  
+✅ Soft delete pattern for critical data: add `is_deleted` + `deleted_at` fields with custom manager filtering  
+
+## Performance Optimization
+✅ Database indexes: (organization, status), (approval_token), (project, created_at)  
+✅ Query optimization: `select_related('project__client_contact')`, `prefetch_related` for lists  
+✅ Pagination: 25 items per page on list endpoints with cursor pagination  
+✅ Caching: Cache project summary counts for 2 minutes (django-cacheops or simple in-memory for MVP)  
+
+## Frontend Security
+✅ Sanitize user-generated content before rendering: use DOMPurify via `svelte-dompurify` wrapper  
+✅ CSP headers: Configure via django-csp middleware (nonce for inline scripts in approval page)  
+✅ XSS prevention: DRF serializers escape HTML by default; Svelte auto-escapes bindings  
+
+## Environment Variables Template (.env.example)
+```bash
+# Django
+DJANGO_SECRET_KEY=your-secret-key-here
+DJANGO_DEBUG=True
+ALLOWED_HOSTS=localhost,127.0.0.1,.replit.app
+
+# Database (Replit auto-sets this, but document)
+DATABASE_URL=postgres://user:pass@localhost:5432/scopeguard
+
+# Email (Resend free tier for MVP)
+RESEND_API_KEY=re_1234567890
+DEFAULT_FROM_EMAIL=noreply@scopeguard.app
+
+# Frontend
+FRONTEND_URL=https://scopeguard.replit.app
+
+# Optional Integrations
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...  # Per-org, stored in branding JSON
+
+# Security
+CORS_ALLOWED_ORIGINS=https://scopeguard.replit.app
+CSRF_TRUSTED_ORIGINS=https://scopeguard.replit.app
+```
+
+## Testing Requirements (Provide for Each Feature)
+### Backend (pytest)
+```python
+# tests/test_change_requests.py
+@pytest.mark.django_db
+def test_approval_token_expires_after_14_days():
+    """Token should return 404 after expiration"""
+    cr = ChangeRequestFactory(status='SENT')
+    # Freeze time to 15 days later
+    with freeze_time(cr.created_at + timedelta(days=15)):
+        response = api_client.get(f'/change-requests/approve/{cr.approval_token}/')
+        assert response.status_code == 404
+
+@pytest.mark.django_db
+def test_state_machine_prevents_invalid_transition():
+    """Cannot jump from DRAFT to APPROVED without SENT"""
+    cr = ChangeRequestFactory(status='DRAFT')
+    cr.status = 'APPROVED'
+    with pytest.raises(ValueError, match='Invalid transition'):
+        cr.save()  # Signal should raise
+
+@pytest.mark.django_db
+def test_csv_export_matches_quickbooks_format():
+    """Export headers and data types must match QB import spec"""
+    # ... test implementation
+```
+
+### Frontend (Vitest + Testing Library)
+```typescript
+// src/lib/components/change-requests/CreateChangeRequestModal.test.ts
+import { render, screen, fireEvent } from '@testing-library/svelte';
+import CreateChangeRequestModal from './CreateChangeRequestModal.svelte';
+
+test('calculates total correctly when hours change', async () => {
+  render(CreateChangeRequestModal, {
+    props: {
+      projectId: 'test-123',
+      hourlyRateCents: 15000, // $150/hr
+      onClose: vi.fn()
+    }
+  });
+  
+  const hoursInput = screen.getByPlaceholderText('2.5');
+  await fireEvent.input(hoursInput, { target: { value: '3' } });
+  
+  expect(screen.getByText('$450.00')).toBeInTheDocument();
+});
+
+test('prevents submission with invalid form', async () => {
+  // ... test validation errors
+});
+```
+
+## CI/CD Pipeline (GitHub Actions Template)
+```yaml
+# .github/workflows/ci.yml
+name: ScopeGuard CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: scopeguard_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-test.txt
+      
+      - name: Run backend tests
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/scopeguard_test
+          DJANGO_SECRET_KEY: test-key
+        run: |
+          python manage.py migrate
+          pytest --cov=scopeguard --cov-report=xml
+      
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install frontend dependencies
+        run: npm ci
+      
+      - name: Run frontend tests
+        run: npm run test:unit
+      
+      - name: Type check frontend
+        run: npm run check
+      
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+
+  deploy-staging:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Collect static files
+        run: python manage.py collectstatic --noinput
+      - name: Deploy to Replit
+        run: |
+          # Stub: Use Replit API or webhook to trigger deploy
+          curl -X POST ${{ secrets.REPLIT_DEPLOY_WEBHOOK }} \
+            -H "Authorization: Bearer ${{ secrets.REPLIT_API_KEY }}" \
+            -d '{"commit": "${{ github.sha }}"}'
+```
+
+## Replit-Specific Deployment Notes
+✅ Use Replit's PostgreSQL addon: DATABASE_URL auto-injected  
+✅ Static files: `python manage.py collectstatic` → served via Replit's built-in CDN  
+✅ Background tasks: Use synchronous email send for MVP; add django-q2 later via Replit "Always On" + cron  
+✅ Secrets: Store all env vars in Replit Secrets tab (never commit .env)  
+✅ Health check: Implement GET /health/ endpoint returning { status: "ok", db: "connected", version: "1.0.0" } for uptime monitoring  
+✅ Replit configuration: Provide `replit.nix` pinning Python 3.12 and Node 20 for consistent builds  
+
+---
+
+# MVP SUCCESS METRICS (VALIDATE IN BETA)
+✅ **Time-to-Value**: PM can create + send a change request in <90 seconds from login  
+✅ **Client Friction**: Client approves via mobile in <3 clicks, zero login required  
+✅ **Revenue Recovery**: Beta agencies report ≥$1,500/mo in previously-unbilled scope recovered  
+✅ **Reliability**: Zero approval token collisions or security issues in 100-test run  
+✅ **Export Accuracy**: CSV imports into QuickBooks Online without manual field mapping  
+
+---
+
+# START BUILDING SEQUENCE (FOLLOW THIS ORDER)
+1. **Setup**: Initialize Django project with postgres, configure DRF, Svelte + Vite + Tailwind scaffold  
+2. **Auth**: Implement Organization/User/ClientContact models + JWT auth + RBAC middleware  
+3. **Projects**: Build Project CRUD with serializers, ViewSet, and basic Svelte list/detail components  
+4. **Change Requests**: Implement ChangeRequest model + state machine signals + approval token logic  
+5. **Approval Flow**: Build public approval endpoint + ClientApprovalPage.svelte with branding support  
+6. **Dashboard**: Create PM dashboard with filterable ChangeRequestList.svelte + live status updates  
+7. **Export**: Implement CSV export endpoint + download button in frontend  
+8. **Polish**: Add Slack webhook stub, audit logging middleware, rate limiting, and error boundaries  
+9. **Test**: Write critical path tests for state transitions, token security, and CSV format  
+10. **Deploy**: Configure GitHub Actions CI/CD + Replit deployment workflow  
+
+# WHEN IN DOUBT: Prioritize correctness and auditability over cleverness. 
+# ScopeGuard protects agency margins—every approval must be deterministic, traceable, and dispute-resistant.
+
+# BEGIN: Start with Phase 1.1 - Authentication & Multi-Tenancy models and setup.
+```
+
+---
+
+## 🎯 HOW TO USE THIS PROMPT
+
+1. **Copy everything from `# ROLE & STACK DEFINITION` to the end**
+2. **Paste directly into Replit.ai chat**
+3. **Start with the first instruction**: "BEGIN: Start with Phase 1.1..."
+4. **Iterate feature-by-feature**: After each output, say "Continue with Phase 1.2" or "Now implement the approval endpoint"
+5. **Preserve context**: If Replit.ai loses track, re-paste the model definitions or key requirements
+
+## 💡 PRO TIPS FOR REPLIT.AI
+
+🔹 **Break large requests**: If output truncates, reply "Continue from last line" + paste the last 3 lines  
+🔹 **Test-driven**: Ask "Write the pytest test for this function BEFORE implementing it" to ensure testable design  
+🔹 **Type safety first**: Enforce "Add TypeScript types to this Svelte component" after Python implementation  
+🔹 **Security review**: After each feature, ask "What security edge cases should we test for this endpoint?"  
+🔹 **Replit optimization**: Always mention "Make this Replit-deployable" to get container-friendly code  
+
+## 🚀 LAUNCH CHECKLIST (After Build)
+
+- [ ] Run `python manage.py check --deploy` for production settings review  
+- [ ] Test approval flow on mobile (iOS Safari + Android Chrome)  
+- [ ] Verify CSV export opens correctly in QuickBooks Online sandbox  
+- [ ] Confirm rate limiting blocks brute-force token guessing  
+- [ ] Document onboarding flow for beta agencies (Loom video + checklist)  
+
+**You now have a complete, production-ready prompt to build ScopeGuard in Replit.ai**. Start with authentication, iterate through the phases, and you'll have a revenue-protecting SaaS ready for beta agencies in 2-4 weeks. 
+
+Go build something that matters. 💪

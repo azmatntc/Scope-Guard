@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "ScopeGuard"
+version = "1.0.0"
+id = "artifacts/scopeguard"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 26018
+
+[services.development]
+run = "pnpm --filter @workspace/scopeguard run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/scopeguard", "run", "build" ]
+publicDir = "artifacts/scopeguard/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "26018"
+BASE_PATH = "/"
