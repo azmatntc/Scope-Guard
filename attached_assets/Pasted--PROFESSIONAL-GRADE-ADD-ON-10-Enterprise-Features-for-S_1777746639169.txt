@@ -1,0 +1,903 @@
+# 🚀 PROFESSIONAL-GRADE ADD-ON: 10 Enterprise Features for ScopeGuard
+
+*Append this section to the end of your ScopeGuard Replit.ai prompt to elevate from MVP to production-grade, enterprise-ready SaaS*
+
+```markdown
+---
+
+# 🎯 PROFESSIONAL-GRADE FEATURE ADD-ON (10 Critical Enhancements)
+
+Add these 10 functionalities to transform ScopeGuard from MVP to enterprise-ready. Each includes: models, API specs, frontend components, and implementation notes for Django 5 + Svelte 5 + Postgres.
+
+---
+
+## 1️⃣ Advanced Audit Logging & Compliance Trail
+**Why**: Agencies need immutable records for client disputes, SOC 2 compliance, and internal reviews.
+
+### Implementation
+```python
+# audit/models.py
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+
+class AuditLog(models.Model):
+    ACTION_CHOICES = [
+        ('CREATE', 'Create'), ('UPDATE', 'Update'), ('DELETE', 'Delete'),
+        ('APPROVE', 'Approve'), ('REJECT', 'Reject'), ('EXPORT', 'Export'),
+        ('LOGIN', 'Login'), ('PERMISSION_CHANGE', 'Permission Change')
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    action = models.CharField(max_length=30, choices=ACTION_CHOICES)
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.UUIDField()
+    content_object = GenericForeignKey('content_type', 'object_id')
+    
+    # Change tracking
+    field_changes = models.JSONField(default=list)  # [{field, old_value, new_value}]
+    request_metadata = models.JSONField(default=dict)  # {ip, user_agent, endpoint}
+    
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['organization', '-created_at']),
+            models.Index(fields=['content_type', 'object_id']),
+            models.Index(fields=['user', 'action']),
+        ]
+        ordering = ['-created_at']
+```
+
+```python
+# audit/middleware.py (Auto-log all changes)
+class AuditLogMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+    
+    def __call__(self, request):
+        response = self.get_response(request)
+        
+        # Log mutations on POST/PUT/PATCH/DELETE
+        if request.method in ['POST', 'PUT', 'PATCH', 'DELETE'] and request.user.is_authenticated:
+            # Defer to signal handlers for model-specific logging
+            pass
+        return response
+```
+
+```python
+# audit/signals.py (Auto-capture field changes)
+@receiver(post_save, sender=ChangeRequest)
+def log_change_request_changes(sender, instance, created, **kwargs):
+    if created:
+        AuditLog.objects.create(
+            organization=instance.organization,
+            user=get_current_user(),  # thread-local helper
+            action='CREATE',
+            content_object=instance,
+            field_changes=[{'field': k, 'new_value': v} for k, v in instance.__dict__.items()],
+            request_metadata=capture_request_metadata()
+        )
+    else:
+        # Compare with previous version using django-simple-history or manual diff
+        old_instance = sender.objects.get(pk=instance.pk)
+        changes = diff_models(old_instance, instance)
+        if changes:
+            AuditLog.objects.create(
+                organization=instance.organization,
+                action='UPDATE',
+                content_object=instance,
+                field_changes=changes,
+                request_metadata=capture_request_metadata()
+            )
+```
+
+**Frontend Component**: `AuditLogViewer.svelte`
+- Filterable table: by date range, user, action type, object type
+- Expandable rows showing before/after field values with syntax highlighting
+- Export to PDF/CSV for compliance reports
+- Real-time updates via SSE stub
+
+**API Endpoint**: `GET /api/v1/audit-logs/?object_type=change_request&object_id=xyz&date_from=2026-01-01`
+
+---
+
+## 2️⃣ Multi-Currency & Tax Handling
+**Why**: Agencies work with international clients; need accurate billing in client's currency with tax compliance.
+
+### Implementation
+```python
+# billing/models.py
+class Currency(models.Model):
+    code = models.CharField(max_length=3, unique=True)  # USD, EUR, GBP
+    symbol = models.CharField(max_length=5)  # $, €, £
+    exchange_rate = models.DecimalField(max_digits=10, decimal_places=6)  # vs USD base
+    updated_at = models.DateTimeField(auto_now=True)
+
+class TaxRate(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    country = models.CharField(max_length=2)  # ISO 3166-1 alpha-2
+    region = models.CharField(max_length=100, blank=True)  # State/province
+    rate_percent = models.DecimalField(max_digits=5, decimal_places=2)  # 8.5 for 8.5%
+    tax_name = models.CharField(max_length=100)  # "VAT", "GST", "Sales Tax"
+    is_compound = models.BooleanField(default=False)  # For layered taxes
+
+# Extend ChangeRequest
+class ChangeRequest(models.Model):
+    # ... existing fields ...
+    currency = models.ForeignKey(Currency, on_delete=models.PROTECT, default=get_usd_currency)
+    tax_rate = models.ForeignKey(TaxRate, on_delete=models.SET_NULL, null=True, blank=True)
+    subtotal_cents = models.PositiveIntegerField(editable=False)  # pre-tax
+    tax_amount_cents = models.PositiveIntegerField(editable=False)  # calculated
+    total_with_tax_cents = models.PositiveIntegerField(editable=False)  # final amount
+    
+    def save(self, *args, **kwargs):
+        # Auto-calculate tax-inclusive totals
+        self.subtotal_cents = int(float(self.estimated_hours) * self.hourly_rate_cents)
+        if self.tax_rate:
+            self.tax_amount_cents = int(self.subtotal_cents * self.tax_rate.rate_percent / 100)
+        else:
+            self.tax_amount_cents = 0
+        self.total_with_tax_cents = self.subtotal_cents + self.tax_amount_cents
+        super().save(*args, **kwargs)
+```
+
+**API Enhancement**:
+```python
+# change_requests/serializers.py
+class ChangeRequestSerializer(serializers.ModelSerializer):
+    # Add currency conversion for display
+    total_usd = serializers.SerializerMethodField()
+    tax_breakdown = serializers.SerializerMethodField()
+    
+    def get_total_usd(self, obj):
+        if obj.currency.code == 'USD':
+            return obj.total_with_tax_cents / 100
+        return (obj.total_with_tax_cents / obj.currency.exchange_rate) / 100
+    
+    def get_tax_breakdown(self, obj):
+        if not obj.tax_rate:
+            return None
+        return {
+            'name': obj.tax_rate.tax_name,
+            'rate': f"{obj.tax_rate.rate_percent}%",
+            'amount': obj.tax_amount_cents / 100,
+            'currency': obj.currency.code
+        }
+```
+
+**Frontend**: 
+- Currency selector in `CreateChangeRequestModal.svelte` with live conversion preview
+- Tax auto-detect based on client contact country (using `django-countries`)
+- Toggle to show amounts in base currency (USD) or client currency
+
+---
+
+## 3️⃣ Advanced RBAC with Custom Permissions
+**Why**: Teams need granular control: junior PMs can draft but not send; finance can view but not edit.
+
+### Implementation
+```python
+# organizations/permissions.py
+from rest_framework import permissions
+
+class HasPermission(permissions.BasePermission):
+    """Check for custom permission codename"""
+    def __init__(self, permission_codename):
+        self.permission_codename = permission_codename
+    
+    def has_permission(self, request, view):
+        return request.user.has_perm(f'change_requests.{self.permission_codename}')
+
+# In settings.py - custom permissions
+CUSTOM_PERMISSIONS = [
+    ('can_draft_change', 'Can draft change requests'),
+    ('can_send_to_client', 'Can send change requests to clients'),
+    ('can_approve_internal', 'Can internally approve before client send'),
+    ('can_export_financial', 'Can export financial data'),
+    ('can_manage_team', 'Can invite/remove team members'),
+]
+
+# Extend User model
+class User(AbstractUser):
+    # ... existing fields ...
+    permissions = models.ManyToManyField(
+        'auth.Permission',
+        related_name='user_custom_permissions',
+        blank=True
+    )
+```
+
+```python
+# change_requests/views.py - Apply granular permissions
+class ChangeRequestViewSet(viewsets.ModelViewSet):
+    # ... existing ...
+    
+    def get_permissions(self):
+        if self.action == 'create':
+            return [permissions.IsAuthenticated(), HasPermission('can_draft_change')]
+        elif self.action in ['update', 'partial_update']:
+            return [permissions.IsAuthenticated(), HasPermission('can_draft_change')]
+        elif self.action == 'send_to_client':  # custom action
+            return [permissions.IsAuthenticated(), HasPermission('can_send_to_client')]
+        elif self.action == 'export_csv':
+            return [permissions.IsAuthenticated(), HasPermission('can_export_financial')]
+        return [permissions.IsAuthenticated()]
+    
+    @action(detail=True, methods=['post'], permission_classes=[HasPermission('can_send_to_client')])
+    def send_to_client(self, request, pk=None):
+        """Custom action: transition DRAFT → SENT + trigger email"""
+        cr = self.get_object()
+        cr.status = 'SENT'
+        cr.save()
+        return Response({'status': 'sent'})
+```
+
+**Frontend**: 
+- Role/permission manager UI: `TeamPermissionsManager.svelte`
+- Dynamic UI hiding: disable "Send to Client" button if user lacks permission
+- Permission tooltips explaining what each role can do
+
+---
+
+## 4️⃣ Webhook System for Integrations
+**Why**: Agencies use Zapier, Make, Slack, QuickBooks—need event-driven integrations without polling.
+
+### Implementation
+```python
+# integrations/models.py
+class WebhookSubscription(models.Model):
+    EVENT_CHOICES = [
+        ('change_request.approved', 'Change Request Approved'),
+        ('change_request.rejected', 'Change Request Rejected'),
+        ('project.completed', 'Project Completed'),
+        ('invoice.exported', 'Financial Data Exported'),
+    ]
+    
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    url = models.URLField(max_length=500)
+    events = models.ArrayField(  # Postgres-specific
+        models.CharField(max_length=50, choices=EVENT_CHOICES),
+        default=list
+    )
+    secret = models.CharField(max_length=64, default=generate_webhook_secret)  # for signature verification
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        indexes = [models.Index(fields=['organization', 'is_active'])]
+
+class WebhookDelivery(models.Model):
+    subscription = models.ForeignKey(WebhookSubscription, on_delete=models.CASCADE)
+    event_type = models.CharField(max_length=50)
+    payload = models.JSONField()
+    response_status = models.IntegerField(null=True)
+    response_body = models.TextField(blank=True)
+    delivered_at = models.DateTimeField(null=True)
+    retry_count = models.IntegerField(default=0)
+    
+    class Meta:
+        indexes = [models.Index(fields=['-delivered_at']), models.Index(fields=['retry_count'])]
+```
+
+```python
+# integrations/tasks.py (Celery or django-q for async delivery)
+def deliver_webhook(webhook_id, event_type, payload):
+    subscription = WebhookSubscription.objects.get(id=webhook_id, is_active=True)
+    
+    # Sign payload for security
+    signature = hmac.new(
+        subscription.secret.encode(),
+        json.dumps(payload, sort_keys=True).encode(),
+        hashlib.sha256
+    ).hexdigest()
+    
+    headers = {
+        'Content-Type': 'application/json',
+        'X-ScopeGuard-Signature': f'sha256={signature}',
+        'X-ScopeGuard-Event': event_type,
+        'User-Agent': 'ScopeGuard-Webhook/1.0'
+    }
+    
+    try:
+        response = requests.post(
+            subscription.url,
+            json=payload,
+            headers=headers,
+            timeout=10,
+            allow_redirects=False
+        )
+        # Log delivery
+        WebhookDelivery.objects.create(
+            subscription=subscription,
+            event_type=event_type,
+            payload=payload,
+            response_status=response.status_code,
+            response_body=response.text[:1000],  # Truncate for storage
+            delivered_at=timezone.now()
+        )
+        return response.status_code < 400
+    except requests.RequestException as e:
+        # Schedule retry with exponential backoff
+        schedule_webhook_retry(webhook_id, event_type, payload, retry_count=1)
+        return False
+```
+
+**API Endpoint**: `POST /api/v1/webhooks/test/` - Send test payload to verify endpoint
+
+**Frontend**: `WebhookManager.svelte`
+- Form to register webhook URL + select events
+- Delivery history table with status badges + retry button
+- Payload preview with sample JSON for each event type
+
+---
+
+## 5️⃣ Advanced Reporting & Analytics Dashboard
+**Why**: Agency owners need insights: scope creep trends, approval velocity, revenue impact.
+
+### Implementation
+```python
+# analytics/views.py
+@api_view(['GET'])
+def dashboard_analytics(request):
+    org = request.user.organization
+    date_from = request.query_params.get('from', (timezone.now() - timedelta(days=90)).date())
+    date_to = request.query_params.get('to', timezone.now().date())
+    
+    # Pre-aggregated metrics using Postgres window functions
+    with connection.cursor() as cursor:
+        cursor.execute("""
+            WITH change_metrics AS (
+                SELECT 
+                    DATE_TRUNC('week', created_at) as week,
+                    COUNT(*) FILTER (WHERE status = 'APPROVED') as approved_count,
+                    COUNT(*) FILTER (WHERE status = 'REJECTED') as rejected_count,
+                    SUM(total_with_tax_cents) FILTER (WHERE status = 'APPROVED') as approved_revenue_cents,
+                    AVG(EXTRACT(EPOCH FROM (approved_at - created_at))/3600) as avg_approval_hours
+                FROM change_requests_change_request
+                WHERE organization_id = %s 
+                    AND created_at BETWEEN %s AND %s
+                GROUP BY week
+            )
+            SELECT * FROM change_metrics ORDER BY week;
+        """, [org.id, date_from, date_to])
+        weekly_trends = [
+            {'week': row[0], 'approved': row[1], 'rejected': row[2], 
+             'revenue_cents': row[3], 'avg_approval_hours': row[4]}
+            for row in cursor.fetchall()
+        ]
+    
+    # Top scope creep categories (simple NLP on title/description)
+    top_categories = ChangeRequest.objects.filter(
+        organization=org, status='APPROVED', created_at__range=[date_from, date_to]
+    ).extra(select={
+        'category': """
+            CASE 
+                WHEN title ILIKE '%design%' OR description ILIKE '%design%' THEN 'Design'
+                WHEN title ILIKE '%development%' OR description ILIKE '%code%' THEN 'Development'
+                WHEN title ILIKE '%content%' OR description ILIKE '%copy%' THEN 'Content'
+                ELSE 'Other'
+            END
+        """
+    }).values('category').annotate(
+        count=Count('id'),
+        total_revenue=Sum('total_with_tax_cents')
+    ).order_by('-total_revenue')
+    
+    return Response({
+        'weekly_trends': weekly_trends,
+        'top_categories': list(top_categories),
+        'summary': {
+            'total_approved': ChangeRequest.objects.filter(organization=org, status='APPROVED', created_at__range=[date_from, date_to]).count(),
+            'total_revenue_cents': ChangeRequest.objects.filter(organization=org, status='APPROVED', created_at__range=[date_from, date_to]).aggregate(total=Sum('total_with_tax_cents'))['total'] or 0,
+            'avg_approval_time_hours': 24.5  # Placeholder - calculate from approved_at - created_at
+        }
+    })
+```
+
+**Frontend**: `AnalyticsDashboard.svelte`
+- Interactive line chart (using `svelte-chartjs` or `d3-svelte`) for weekly trends
+- Pie chart for scope categories
+- KPI cards: Total Recovered Revenue, Avg Approval Time, Approval Rate %
+- Date range picker with presets (7d, 30d, 90d, YTD)
+- Export chart as PNG/PDF button
+
+---
+
+## 6️⃣ Automated Reminder & Escalation Workflows
+**Why**: Prevent stalled approvals: auto-remind clients after 48h, escalate to PM after 7 days.
+
+### Implementation
+```python
+# workflows/models.py
+class ApprovalWorkflow(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    name = models.CharField(max_length=100)
+    is_active = models.BooleanField(default=True)
+    
+    # Trigger conditions
+    trigger_event = models.CharField(
+        max_length=50,
+        choices=[('change_request.sent', 'Change Request Sent')]
+    )
+    
+    # Actions with delays
+    actions = models.JSONField(default=list)  # [
+    #   {"type": "email_reminder", "delay_hours": 48, "template": "gentle_nudge"},
+    #   {"type": "slack_alert", "delay_hours": 168, "channel": "#projects"}
+    # ]
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+class WorkflowExecution(models.Model):
+    workflow = models.ForeignKey(ApprovalWorkflow, on_delete=models.CASCADE)
+    trigger_object_type = models.CharField(max_length=50)  # "change_request"
+    trigger_object_id = models.UUIDField()
+    status = models.CharField(
+        max_length=20,
+        choices=[('PENDING', 'Pending'), ('RUNNING', 'Running'), ('COMPLETED', 'Completed'), ('FAILED', 'Failed')],
+        default='PENDING'
+    )
+    scheduled_at = models.DateTimeField()
+    executed_at = models.DateTimeField(null=True)
+    result_metadata = models.JSONField(default=dict)
+```
+
+```python
+# workflows/management/commands/run_workflows.py
+class Command(BaseCommand):
+    help = 'Execute pending workflow actions'
+    
+    def handle(self, *args, **options):
+        due_executions = WorkflowExecution.objects.filter(
+            status='PENDING',
+            scheduled_at__lte=timezone.now()
+        ).select_related('workflow')
+        
+        for execution in due_executions:
+            try:
+                execute_workflow_action(execution)
+                execution.status = 'COMPLETED'
+                execution.executed_at = timezone.now()
+                execution.save()
+            except Exception as e:
+                execution.status = 'FAILED'
+                execution.result_metadata = {'error': str(e)}
+                execution.save()
+                # Optionally schedule retry
+```
+
+**Frontend**: `WorkflowBuilder.svelte`
+- Visual workflow editor: drag-and-drop triggers → delays → actions
+- Template library: "Gentle Client Nudge", "Urgent Escalation", "Weekly Summary"
+- Execution history log with status + error details
+
+---
+
+## 7️⃣ Document Attachment & E-Signature Support
+**Why**: Some scope changes require SOWs, mockups, or legal sign-off—not just text approvals.
+
+### Implementation
+```python
+# documents/models.py
+class Document(models.Model):
+    change_request = models.ForeignKey(ChangeRequest, on_delete=models.CASCADE, related_name='attachments')
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    file = models.FileField(upload_to='attachments/%Y/%m/%d/', storage=CustomS3Storage())  # Replit-compatible
+    filename = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=100)
+    file_size_bytes = models.PositiveIntegerField()
+    
+    # E-signature fields
+    requires_signature = models.BooleanField(default=False)
+    signature_status = models.CharField(
+        max_length=20,
+        choices=[('NOT_REQUIRED', 'Not Required'), ('PENDING', 'Pending'), ('SIGNED', 'Signed')],
+        default='NOT_REQUIRED'
+    )
+    signed_at = models.DateTimeField(null=True)
+    signer_email = models.EmailField(null=True)
+    signature_hash = models.CharField(max_length=64, null=True)  # SHA256 of signed content
+    
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        indexes = [models.Index(fields=['change_request', 'uploaded_at'])]
+```
+
+```python
+# documents/views.py - E-signature flow
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def sign_document(request, token):
+    """Public endpoint for client e-signature"""
+    try:
+        doc = Document.objects.get(
+            signature_hash=token,
+            requires_signature=True,
+            signature_status='PENDING'
+        )
+    except Document.DoesNotExist:
+        return Response({'error': 'Invalid signature link'}, status=404)
+    
+    # Capture signature metadata
+    signature_data = {
+        'signed_at': timezone.now().isoformat(),
+        'signer_ip': request.META.get('REMOTE_ADDR'),
+        'user_agent': request.META.get('HTTP_USER_AGENT'),
+        'consent_text': request.data.get('consent_text', '')
+    }
+    
+    # Update document
+    doc.signature_status = 'SIGNED'
+    doc.signed_at = timezone.now()
+    doc.save(update_fields=['signature_status', 'signed_at'])
+    
+    # Log audit event
+    AuditLog.objects.create(
+        organization=doc.change_request.organization,
+        action='DOCUMENT_SIGNED',
+        content_object=doc,
+        field_changes=[{'field': 'signature_status', 'new_value': 'SIGNED'}],
+        request_metadata={**signature_data, 'document_id': str(doc.id)}
+    )
+    
+    return Response({'status': 'signed', 'message': 'Document signed successfully'})
+```
+
+**Frontend**: 
+- `DocumentUploader.svelte`: Drag-and-drop with preview, virus scan stub
+- `SignaturePad.svelte`: Canvas-based signature capture (using `svelte-signature-pad`)
+- `DocumentViewer.svelte`: PDF preview with signature status badge + sign button
+
+---
+
+## 8️⃣ API Rate Limiting & Usage Analytics
+**Why**: Protect infrastructure, prevent abuse, and provide transparency to enterprise clients.
+
+### Implementation
+```python
+# core/throttling.py
+from rest_framework.throttling import UserRateThrottle
+from django.core.cache import cache
+
+class OrganizationRateThrottle(UserRateThrottle):
+    """Rate limit by organization, not just user"""
+    scope = 'organization'
+    
+    def allow_request(self, request, view):
+        # Get organization from user or token
+        org_id = getattr(request.user, 'organization_id', None) or \
+                 getattr(request.auth, 'organization_id', None)
+        
+        if not org_id:
+            return super().allow_request(request, view)
+        
+        # Custom key: org_id + endpoint
+        key = f"throttle_org_{org_id}_{view.__class__.__name__}"
+        now = time.time()
+        window = self.get_rate_limit_window()  # e.g., 3600 seconds
+        
+        # Get current count
+        history = cache.get(key, [])
+        history = [t for t in history if t > now - window]
+        
+        if len(history) >= self.num_requests:
+            return False
+        
+        history.append(now)
+        cache.set(key, history, window)
+        return True
+
+# In settings.py
+REST_FRAMEWORK = {
+    'DEFAULT_THROTTLE_CLASSES': [
+        'core.throttling.OrganizationRateThrottle',
+        'rest_framework.throttling.AnonRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'organization': '1000/hour',  # Per-org limit
+        'anon': '100/hour',
+        'approval_token': '5/hour',  # Stricter for public endpoints
+    }
+}
+```
+
+```python
+# analytics/models.py - Usage tracking
+class APIUsageLog(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    endpoint = models.CharField(max_length=255)  # "/api/v1/change-requests/"
+    method = models.CharField(max_length=10)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    response_status = models.IntegerField()
+    response_time_ms = models.PositiveIntegerField()
+    request_size_bytes = models.PositiveIntegerField(null=True)
+    response_size_bytes = models.PositiveIntegerField(null=True)
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['organization', '-timestamp']),
+            models.Index(fields=['endpoint', 'timestamp']),
+        ]
+```
+
+**Middleware**: Log all API requests to `APIUsageLog` asynchronously (don't block response)
+
+**Frontend**: `UsageDashboard.svelte`
+- Real-time request counter with quota progress bar
+- Historical usage chart (requests/hour, avg response time)
+- Top endpoints table + error rate breakdown
+- Alert when approaching rate limit (80% threshold)
+
+---
+
+## 9️⃣ Scheduled Data Export & Import
+**Why**: Agencies need automated backups, accounting syncs, and bulk onboarding.
+
+### Implementation
+```python
+# exports/models.py
+class ExportSchedule(models.Model):
+    FREQUENCY_CHOICES = [
+        ('daily', 'Daily'), ('weekly', 'Weekly'), ('monthly', 'Monthly')
+    ]
+    
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    name = models.CharField(max_length=100)
+    export_type = models.CharField(
+        max_length=50,
+        choices=[
+            ('change_requests_csv', 'Change Requests CSV'),
+            ('financial_summary_json', 'Financial Summary JSON'),
+            ('audit_log_pdf', 'Audit Log PDF'),
+        ]
+    )
+    frequency = models.CharField(max_length=20, choices=FREQUENCY_CHOICES)
+    day_of_week = models.IntegerField(null=True, blank=True)  # 0=Monday, for weekly
+    day_of_month = models.IntegerField(null=True, blank=True)  # 1-31, for monthly
+    time_utc = models.TimeField(default=datetime.time(2, 0))  # 2 AM UTC
+    
+    # Delivery options
+    delivery_method = models.CharField(
+        max_length=20,
+        choices=[('email', 'Email'), ('s3', 'S3 Bucket'), ('webhook', 'Webhook URL')],
+        default='email'
+    )
+    delivery_target = models.CharField(max_length=500)  # email, bucket path, or URL
+    include_filters = models.JSONField(default=dict)  # { "status": ["APPROVED"], "date_from": "2026-01-01" }
+    
+    is_active = models.BooleanField(default=True)
+    last_run_at = models.DateTimeField(null=True, blank=True)
+    next_run_at = models.DateTimeField(db_index=True)
+    
+    def save(self, *args, **kwargs):
+        # Auto-calculate next_run_at on create/update
+        self.next_run_at = calculate_next_run(self.frequency, self.day_of_week, self.day_of_month, self.time_utc)
+        super().save(*args, **kwargs)
+```
+
+```python
+# exports/tasks.py
+def run_scheduled_exports():
+    """Celery beat task: execute due exports"""
+    due_schedules = ExportSchedule.objects.filter(
+        is_active=True,
+        next_run_at__lte=timezone.now()
+    )
+    
+    for schedule in due_schedules:
+        try:
+            # Generate export based on type + filters
+            file_path, metadata = generate_export(
+                export_type=schedule.export_type,
+                organization=schedule.organization,
+                filters=schedule.include_filters
+            )
+            
+            # Deliver based on method
+            if schedule.delivery_method == 'email':
+                send_export_email(schedule.delivery_target, file_path, metadata)
+            elif schedule.delivery_method == 's3':
+                upload_to_s3(file_path, schedule.delivery_target)
+            elif schedule.delivery_method == 'webhook':
+                post_to_webhook(schedule.delivery_target, metadata, file_path)
+            
+            # Update schedule
+            schedule.last_run_at = timezone.now()
+            schedule.next_run_at = calculate_next_run(...)  # Recalculate
+            schedule.save(update_fields=['last_run_at', 'next_run_at'])
+            
+        except Exception as e:
+            log_export_error(schedule, e)
+            # Optionally retry logic
+```
+
+**Frontend**: `ExportScheduler.svelte`
+- Form builder: select export type → set frequency → configure filters → choose delivery
+- Calendar view showing scheduled export dates
+- Execution history with download links + error details
+- "Run Now" button for immediate test export
+
+---
+
+## 🔟 Advanced Search & Saved Views
+**Why**: Power users need to find change requests fast and reuse complex filters.
+
+### Implementation
+```python
+# search/backends.py - Postgres full-text + filter composition
+from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
+
+def search_change_requests(organization, query_text, filters):
+    """Combined full-text + structured filter search"""
+    qs = ChangeRequest.objects.select_related('project__client_contact').filter(
+        organization=organization
+    )
+    
+    # Full-text search on title + description
+    if query_text:
+        qs = qs.annotate(
+            search=SearchVector('title', 'description', config='english'),
+            rank=SearchRank(SearchVector('title', 'description', config='english'), SearchQuery(query_text, config='english'))
+        ).filter(search=SearchQuery(query_text, config='english')).order_by('-rank')
+    
+    # Structured filters
+    if filters.get('status'):
+        qs = qs.filter(status__in=filters['status'])
+    if filters.get('date_from'):
+        qs = qs.filter(created_at__gte=filters['date_from'])
+    if filters.get('date_to'):
+        qs = qs.filter(created_at__lte=filters['date_to'])
+    if filters.get('min_amount_cents'):
+        qs = qs.filter(total_with_tax_cents__gte=filters['min_amount_cents'])
+    if filters.get('client_email'):
+        qs = qs.filter(project__client_contact__email__iexact=filters['client_email'])
+    
+    # Prefetch for list view performance
+    return qs.prefetch_related('attachments', 'auditlog_set')
+```
+
+```python
+# search/models.py - Saved views
+class SavedView(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    
+    # Stored filter state
+    search_query = models.CharField(max_length=255, blank=True)
+    filter_json = models.JSONField(default=dict)  # { "status": ["APPROVED"], "date_range": "last_30_days" }
+    sort_field = models.CharField(max_length=50, default='-created_at')
+    page_size = models.IntegerField(default=25)
+    
+    is_public = models.BooleanField(default=False)  # Share with org team
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [models.Index(fields=['user', 'is_public'])]
+```
+
+**Frontend**: 
+- `AdvancedSearchBar.svelte`: Combined text input + filter chips + date picker
+- `SavedViewManager.svelte`: Save/load/delete views with share toggle
+- URL sync: `?view=approved-last-30d` for bookmarkable filters
+- Keyboard shortcuts: `/` to focus search, `Ctrl+Enter` to apply
+
+**API**: `GET /api/v1/search/change-requests/?q=design&status=APPROVED&date_from=2026-01-01`
+
+---
+
+# 🎯 INTEGRATION NOTES FOR ALL 10 FEATURES
+
+## Database Optimization
+✅ Add GIN indexes for JSONB fields: `CREATE INDEX idx_field_changes_gin ON audit_auditlog USING GIN (field_changes)`  
+✅ Use Postgres partial indexes for common filters: `CREATE INDEX idx_approved_recent ON change_requests (created_at) WHERE status = 'APPROVED'`  
+✅ Materialized views for heavy analytics: `CREATE MATERIALIZED VIEW mv_weekly_approvals AS ...` + refresh nightly  
+
+## Security Enhancements
+✅ All webhook payloads signed with HMAC-SHA256 + timestamp to prevent replay attacks  
+✅ Document uploads scanned with ClamAV stub + stored with random filenames (never user-provided)  
+✅ Saved views sanitized: validate filter JSON against schema before saving to prevent injection  
+
+## Frontend Performance
+✅ Virtual scrolling for audit logs + search results (>1k rows) using `svelte-virtual-list`  
+✅ Debounced search input (300ms) + optimistic UI updates for filter changes  
+✅ Code-split analytics dashboard: lazy-load chart libraries only when tab is active  
+
+## Testing Strategy Additions
+✅ Property-based testing for tax calculations (Hypothesis library) to catch edge cases  
+✅ Contract testing for webhooks (Pact.io stub) to ensure integration compatibility  
+✅ Load testing for search endpoint: simulate 100 concurrent users with complex filters  
+
+## Replit Deployment Notes
+✅ Use Replit's cron feature to run `run_workflows` and `run_scheduled_exports` commands hourly  
+✅ Store large files (documents) in Replit's filesystem for MVP; abstract to S3 interface for scaling  
+✅ Enable Replit's "Always On" to ensure webhook delivery and scheduled tasks run reliably  
+
+---
+
+# 🚀 PROFESSIONAL-GRADE SUCCESS METRICS
+
+After implementing these 10 features, validate:
+
+✅ **Compliance Ready**: Pass basic SOC 2 checklist (audit logs, access controls, data encryption)  
+✅ **Enterprise Onboarding**: New agency can configure RBAC, webhooks, and exports in <30 minutes  
+✅ **Scalability**: Handle 10k change requests/org with <2s search response time (Postgres tuning)  
+✅ **Integration Ecosystem**: Zapier/Make templates available for top 5 agency workflows  
+✅ **Revenue Expansion**: 30% of customers upgrade to higher tier for advanced features (analytics, workflows)  
+
+---
+
+# 📦 FINAL PROMPT INTEGRATION INSTRUCTIONS
+
+1. **Append this entire section** to the end of your original ScopeGuard Replit.ai prompt  
+2. **When building**, prioritize features in this order for maximum ROI:  
+   ```
+   1. Audit Logging (compliance foundation)  
+   2. Advanced RBAC (team collaboration)  
+   3. Webhooks (integration ecosystem)  
+   4. Analytics (value demonstration)  
+   5. Multi-currency (market expansion)  
+   ... then remaining features  
+   ```  
+3. **For each feature**, instruct Replit.ai:  
+   *"Implement [Feature Name] following the spec above. Start with database models, then API, then frontend component. Include tests."*  
+4. **Preserve context**: After each feature, re-paste the core model definitions to maintain schema consistency  
+
+---
+
+# 💡 PRO TIP: PHASED ROLLOUT STRATEGY
+
+Don't build all 10 at once. Use this rollout plan:
+
+**Phase 1 (Weeks 1-2)**: Audit Logging + Advanced RBAC  
+→ Enables secure team collaboration + compliance foundation  
+
+**Phase 2 (Weeks 3-4)**: Webhooks + Analytics Dashboard  
+→ Unlocks integrations + demonstrates ROI to customers  
+
+**Phase 3 (Weeks 5-6)**: Multi-currency + Document Attachments  
+→ Expands to international clients + complex scope changes  
+
+**Phase 4 (Weeks 7-8)**: Workflows + Search + Exports + Rate Limiting  
+→ Enterprise polish + operational efficiency  
+
+This phased approach lets you:  
+✅ Launch MVP faster with core value  
+✅ Get customer feedback before over-engineering  
+✅ Prioritize features by revenue impact  
+✅ Manage technical debt incrementally  
+
+---
+
+**You now have a complete, enterprise-grade ScopeGuard specification**. Copy the entire prompt (original + this add-on), paste into Replit.ai, and start building with Phase 1.1. 
+
+Your stack (Django 5 + Postgres + Svelte 5) is perfectly suited for these professional features—relational integrity for audit trails, JSONB for flexible workflows, and reactive UIs for complex dashboards. 
+
+Go build a SaaS that agencies will rely on for years. 🎯
+```
+
+---
+
+## 📋 Quick Copy Instructions (Again!)
+
+Since this is even longer, here's the fastest way:
+
+1. **Triple-click** any line inside the code block above to select that line
+2. **Press `Ctrl+A`** (Windows) or `Cmd+A` (Mac) to select all text in the block
+3. **Press `Ctrl+C` / `Cmd+C`** to copy
+4. **Paste into a text editor first** (VS Code, Notepad++) to verify completeness
+5. **Then paste into Replit.ai**
+
+## 🔁 If Still Having Trouble
+
+Reply with:
+- `"Send Part 1/3"`, `"Send Part 2/3"`, etc. → I'll break this into 3 copy-friendly chunks
+- `"Minimal version"` → I'll condense to a 500-line essential prompt
+- `"Plain text format"` → I'll remove markdown fencing for easier selection
+
+Let me know what works best for your setup! 🛠️
