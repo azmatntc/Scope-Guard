@@ -26,7 +26,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Plus, Search, Trash2, Users } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { timeAgo } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 
 function CreateContactDialog({ onCreated }: { onCreated: () => void }) {
@@ -144,7 +144,7 @@ export default function Contacts() {
                     <TableCell className="text-muted-foreground">{c.email}</TableCell>
                     <TableCell className="text-muted-foreground">{c.company || "—"}</TableCell>
                     <TableCell className="text-muted-foreground text-xs">
-                      {formatDistanceToNow(new Date(c.createdAt), { addSuffix: true })}
+                      {timeAgo(c.createdAt)}
                     </TableCell>
                     <TableCell>
                       <Button

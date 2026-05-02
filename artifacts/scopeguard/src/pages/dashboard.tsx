@@ -14,7 +14,7 @@ import {
   CheckCircle2,
   Activity,
 } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { timeAgo } from "@/lib/utils";
 
 function StatCard({
   title,
@@ -131,7 +131,7 @@ export default function Dashboard() {
                       </p>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {item.clientName} · {item.totalFormatted} ·{" "}
-                        {formatDistanceToNow(new Date(item.createdAt), { addSuffix: true })}
+                        {timeAgo(item.createdAt)}
                       </p>
                     </div>
                     <StatusBadge status={item.action} />

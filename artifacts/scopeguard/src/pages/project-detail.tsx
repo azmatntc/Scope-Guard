@@ -38,7 +38,7 @@ import {
   Download,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatDistanceToNow } from "date-fns";
+import { timeAgo } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 
 function AddCRDialog({ projectId, onCreated }: { projectId: string; onCreated: () => void }) {
@@ -240,7 +240,7 @@ export default function ProjectDetail() {
                     </div>
                     <p className="text-xs text-muted-foreground">
                       {cr.estimatedHours}h · ${(cr.totalCents / 100).toFixed(2)} ·{" "}
-                      {formatDistanceToNow(new Date(cr.createdAt), { addSuffix: true })}
+                      {timeAgo(cr.createdAt)}
                     </p>
                     {cr.clientComments && (
                       <p className="text-xs text-muted-foreground mt-1 italic">"{cr.clientComments}"</p>

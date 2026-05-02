@@ -37,7 +37,7 @@ import {
 import { StatusBadge } from "@/components/status-badge";
 import { Plus, Search, FileText, Send, Trash2, MoreHorizontal, Link2, ExternalLink } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatDistanceToNow } from "date-fns";
+import { timeAgo } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 
 function CreateCRDialog({ onCreated }: { onCreated: () => void }) {
@@ -213,7 +213,7 @@ export default function ChangeRequests() {
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {cr.projectName} · {cr.clientName} · {(cr.totalCents / 100).toFixed(2)} USD ·{" "}
-                    {formatDistanceToNow(new Date(cr.createdAt), { addSuffix: true })}
+                    {timeAgo(cr.createdAt)}
                   </p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
