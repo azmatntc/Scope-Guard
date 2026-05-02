@@ -149,9 +149,8 @@ export default function AuditLog() {
               </TableHeader>
               <TableBody>
                 {logs.map((log: any) => (
-                  <>
+                  <tr key={log.id} style={{ display: "contents" }}>
                     <TableRow
-                      key={log.id}
                       className="cursor-pointer hover:bg-muted/40"
                       onClick={() => setExpanded(expanded === log.id ? null : log.id)}
                     >
@@ -166,7 +165,7 @@ export default function AuditLog() {
                       <TableCell className="text-xs text-muted-foreground truncate max-w-48">{log.resourceLabel ?? "—"}</TableCell>
                     </TableRow>
                     {expanded === log.id && (
-                      <TableRow key={`${log.id}-expanded`}>
+                      <TableRow>
                         <TableCell colSpan={5} className="bg-muted/20 text-xs">
                           <div className="grid grid-cols-2 gap-4 py-2 px-2">
                             <div>
@@ -192,7 +191,7 @@ export default function AuditLog() {
                         </TableCell>
                       </TableRow>
                     )}
-                  </>
+                  </tr>
                 ))}
               </TableBody>
             </Table>

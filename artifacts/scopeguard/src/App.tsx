@@ -14,6 +14,7 @@ import ChangeRequests from "@/pages/change-requests";
 import Contacts from "@/pages/contacts";
 import Approve from "@/pages/approve";
 import Analytics from "@/pages/analytics";
+import Automation from "@/pages/automation";
 import Team from "@/pages/team";
 import Webhooks from "@/pages/webhooks";
 import AuditLog from "@/pages/audit-log";
@@ -71,6 +72,9 @@ function Router() {
       </Route>
       <Route path="/analytics">
         <ProtectedLayout><Analytics /></ProtectedLayout>
+      </Route>
+      <Route path="/automation">
+        <ProtectedLayout><Automation /></ProtectedLayout>
       </Route>
       <Route path="/team">
         <ProtectedLayout><Team /></ProtectedLayout>

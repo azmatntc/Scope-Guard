@@ -14,6 +14,7 @@ import analyticsRouter from "./analytics";
 import remindersRouter from "./reminders";
 import savedViewsRouter from "./savedViews";
 import exportsRouter from "./exports";
+import notificationsRouter from "./notifications";
 
 const router: IRouter = Router();
 
@@ -32,5 +33,6 @@ router.use(analyticsRouter);
 router.use(remindersRouter);
 router.use(savedViewsRouter);
 router.use(exportsRouter);
+router.use(notificationsRouter);
 
 export default router;

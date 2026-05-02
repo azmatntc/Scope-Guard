@@ -3,7 +3,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { organizationsTable } from "./organizations";
 
-export const userRoleEnum = pgEnum("user_role", ["ADMIN", "PROJECT_MANAGER"]);
+export const userRoleEnum = pgEnum("user_role", ["ADMIN", "PROJECT_MANAGER", "FINANCE_VIEWER"]);
 
 export const usersTable = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),

@@ -4,8 +4,10 @@ import pinoHttp from "pino-http";
 import session from "express-session";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { globalRateLimit } from "./middlewares/rateLimiter";
 
 const app: Express = express();
+app.set("trust proxy", 1);
 
 app.use(
   pinoHttp({
@@ -47,6 +49,6 @@ app.use(session({
   },
 }));
 
-app.use("/api", router);
+app.use("/api", globalRateLimit, router);
 
 export default app;

@@ -11,7 +11,6 @@ import {
   FileText,
   Users,
   LogOut,
-  ChevronRight,
   BarChart3,
   Zap,
   Bell,
@@ -19,10 +18,12 @@ import {
   Search,
   ShieldCheck,
   UsersRound,
+  Cpu,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
+import NotificationBell from "@/components/notification-bell";
 
 const NAV_GROUPS = [
   {
@@ -39,6 +40,7 @@ const NAV_GROUPS = [
     label: "Insights",
     items: [
       { href: "/analytics", label: "Analytics", icon: BarChart3 },
+      { href: "/automation", label: "Automation", icon: Cpu },
       { href: "/reminders", label: "Reminders", icon: Bell },
       { href: "/exports", label: "Exports", icon: Download },
     ],
@@ -121,15 +123,18 @@ export default function AppLayout({ children }: { children: ReactNode }) {
               <p className="text-sm font-medium truncate">{user?.name}</p>
               <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
-              onClick={() => logout()}
-              title="Sign out"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-            </Button>
+            <div className="flex items-center gap-0.5">
+              <NotificationBell />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+                onClick={() => logout()}
+                title="Sign out"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           </div>
         </div>
       </aside>

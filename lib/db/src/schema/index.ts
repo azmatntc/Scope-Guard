@@ -9,3 +9,4 @@ export * from "./teamMembers";
 export * from "./webhooks";
 export * from "./savedViews";
 export * from "./reminders";
+export * from "./notifications";

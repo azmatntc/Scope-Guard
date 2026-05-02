@@ -4,6 +4,7 @@ import { organizationsTable, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { createHash, timingSafeEqual } from "crypto";
+import { authRateLimit } from "../middlewares/rateLimiter";
 
 const router: IRouter = Router();
 
@@ -32,7 +33,7 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
-router.post("/auth/register", async (req, res) => {
+router.post("/auth/register", authRateLimit, async (req: any, res: any) => {
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: parsed.error.message } });
@@ -76,7 +77,7 @@ router.post("/auth/register", async (req, res) => {
   });
 });
 
-router.post("/auth/login", async (req, res) => {
+router.post("/auth/login", authRateLimit, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: parsed.error.message } });

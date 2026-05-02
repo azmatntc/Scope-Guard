@@ -1,9 +1,12 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { changeRequestsTable, projectsTable, clientContactsTable, activityLogTable } from "@workspace/db";
+import { changeRequestsTable, projectsTable, clientContactsTable, activityLogTable, remindersTable } from "@workspace/db";
 import { and, eq, ilike, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth } from "../middlewares/auth";
+import { writeNotificationForOrg } from "./notifications";
+import { fireWebhookEvent } from "./webhooks";
+import { writeAuditLog } from "./auditLogs";
 
 const router: IRouter = Router();
 
@@ -193,7 +196,110 @@ router.post("/change-requests/:id/send", requireAuth, async (req, res) => {
 
   const [cr] = await db.update(changeRequestsTable).set({ status: "SENT", updatedAt: new Date() }).where(eq(changeRequestsTable.id, req.params.id)).returning();
   await logActivity(cr, row.projects, row.client_contacts, "SENT");
+
+  const scheduledFor = new Date(Date.now() + 48 * 3600 * 1000);
+  await db.insert(remindersTable).values({
+    organizationId: row.projects.organizationId,
+    changeRequestId: cr.id,
+    delayHours: 48,
+    message: "",
+    scheduledFor,
+  });
+
+  await writeNotificationForOrg({
+    organizationId: row.projects.organizationId,
+    type: "CR_SENT",
+    title: `Change order "${cr.title}" sent to ${row.client_contacts.name}`,
+    body: `Total: $${(cr.totalCents / 100).toFixed(2)} · Project: ${row.projects.name} · Auto-reminder scheduled for 48h.`,
+    resourceType: "change_request",
+    resourceId: cr.id,
+    resourceLabel: cr.title,
+    excludeUserId: user.id,
+  });
+
+  await writeAuditLog({
+    organizationId: row.projects.organizationId,
+    userId: user.id,
+    userEmail: user.email,
+    action: "CR_SENT",
+    resourceType: "change_request",
+    resourceId: cr.id,
+    resourceLabel: cr.title,
+    ipAddress: req.ip || undefined,
+  });
+
+  fireWebhookEvent(row.projects.organizationId, "change_request.sent", {
+    data: {
+      id: cr.id,
+      title: cr.title,
+      projectName: row.projects.name,
+      clientName: row.client_contacts.name,
+      clientEmail: row.client_contacts.email,
+      totalCents: cr.totalCents,
+    },
+  });
+
   return res.json(await getEnrichedCR(cr, row.projects, row.client_contacts));
+});
+
+const bulkSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(50),
+  action: z.enum(["send", "delete"]),
+});
+
+router.post("/change-requests/bulk", requireAuth, async (req, res) => {
+  const user = (req as any).user;
+  const parsed = bulkSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: parsed.error.message } });
+  }
+
+  const { ids, action } = parsed.data;
+  const results: { id: string; ok: boolean; error?: string }[] = [];
+
+  for (const id of ids) {
+    try {
+      const [row] = await db.select().from(changeRequestsTable)
+        .innerJoin(projectsTable, eq(changeRequestsTable.projectId, projectsTable.id))
+        .innerJoin(clientContactsTable, eq(projectsTable.clientContactId, clientContactsTable.id))
+        .where(and(eq(changeRequestsTable.id, id), eq(projectsTable.organizationId, user.organizationId)))
+        .limit(1);
+
+      if (!row) { results.push({ id, ok: false, error: "Not found" }); continue; }
+
+      if (action === "send") {
+        const allowed = VALID_TRANSITIONS[row.change_requests.status] ?? [];
+        if (!allowed.includes("SENT")) {
+          results.push({ id, ok: false, error: `Cannot send a ${row.change_requests.status} CO` });
+          continue;
+        }
+        const [cr] = await db.update(changeRequestsTable)
+          .set({ status: "SENT", updatedAt: new Date() })
+          .where(eq(changeRequestsTable.id, id)).returning();
+        await logActivity(cr, row.projects, row.client_contacts, "SENT");
+        const scheduledFor = new Date(Date.now() + 48 * 3600 * 1000);
+        await db.insert(remindersTable).values({
+          organizationId: row.projects.organizationId,
+          changeRequestId: cr.id,
+          delayHours: 48,
+          message: "",
+          scheduledFor,
+        });
+        results.push({ id, ok: true });
+      } else if (action === "delete") {
+        if (row.change_requests.status !== "DRAFT") {
+          results.push({ id, ok: false, error: "Only DRAFT COs can be deleted" });
+          continue;
+        }
+        await db.delete(changeRequestsTable).where(eq(changeRequestsTable.id, id));
+        results.push({ id, ok: true });
+      }
+    } catch (e: any) {
+      results.push({ id, ok: false, error: e?.message });
+    }
+  }
+
+  return res.json({ results, succeeded: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length });
 });
 
 export default router;

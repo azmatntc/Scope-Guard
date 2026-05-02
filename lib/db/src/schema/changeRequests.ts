@@ -37,6 +37,8 @@ export const changeRequestsTable = pgTable("change_requests", {
   approvedAt: timestamp("approved_at"),
   approvedByIp: inet("approved_by_ip"),
   clientComments: text("client_comments").notNull().default(""),
+  clientSignature: text("client_signature"),
+  clientSignedName: text("client_signed_name"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

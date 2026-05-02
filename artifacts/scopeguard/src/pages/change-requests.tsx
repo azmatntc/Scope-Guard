@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -35,10 +36,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { StatusBadge } from "@/components/status-badge";
-import { Plus, Search, FileText, Send, Trash2, MoreHorizontal, Link2, ExternalLink } from "lucide-react";
+import { Plus, Search, FileText, Send, Trash2, MoreHorizontal, Link2, ExternalLink, CheckSquare } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { timeAgo } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 function CreateCRDialog({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false);
@@ -129,6 +132,8 @@ export default function ChangeRequests() {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
 
   const { data: changeRequests, isLoading } = useQuery(
     getListChangeRequestsQueryOptions({
@@ -152,13 +157,63 @@ export default function ChangeRequests() {
     },
   });
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: getListChangeRequestsQueryKey() });
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: getListChangeRequestsQueryKey() });
+    setSelected(new Set());
+  };
 
   const copyApprovalLink = (cr: any) => {
     const url = `${window.location.origin}/approve/${cr.approvalToken}`;
     navigator.clipboard.writeText(url);
     toast({ title: "Link copied!", description: "Share it with your client." });
   };
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (!changeRequests) return;
+    if (selected.size === changeRequests.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(changeRequests.map((cr: any) => cr.id)));
+    }
+  };
+
+  const runBulk = async (action: "send" | "delete") => {
+    if (selected.size === 0) return;
+    if (action === "delete" && !confirm(`Delete ${selected.size} change order(s)?`)) return;
+    setBulkLoading(true);
+    try {
+      const r = await fetch(`${BASE}/api/change-requests/bulk`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selected), action }),
+      });
+      const d = await r.json();
+      toast({
+        title: `${d.succeeded} succeeded${d.failed > 0 ? `, ${d.failed} failed` : ""}`,
+        description: action === "send" ? "Auto-reminders scheduled for 48h." : "Deleted successfully.",
+      });
+      refresh();
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const allSelected = !!changeRequests?.length && selected.size === changeRequests.length;
+  const someSelected = selected.size > 0;
+
+  const drafts = (changeRequests ?? []).filter((cr: any) => selected.has(cr.id) && cr.status === "DRAFT");
+  const canBulkSend = drafts.length > 0 && drafts.length === selected.size;
+  const canBulkDelete = drafts.length === selected.size;
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
@@ -170,7 +225,7 @@ export default function ChangeRequests() {
         <CreateCRDialog onCreated={refresh} />
       </div>
 
-      <div className="flex gap-3">
+      <div className="flex gap-3 flex-wrap">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search change orders…" className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -190,6 +245,26 @@ export default function ChangeRequests() {
         </Select>
       </div>
 
+      {someSelected && (
+        <div className="flex items-center gap-3 bg-primary/5 border border-primary/20 rounded-lg px-4 py-2.5">
+          <CheckSquare className="h-4 w-4 text-primary shrink-0" />
+          <span className="text-sm font-medium flex-1">{selected.size} selected</span>
+          {canBulkSend && (
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => runBulk("send")} disabled={bulkLoading}>
+              <Send className="h-3 w-3 mr-1" />Send All
+            </Button>
+          )}
+          {canBulkDelete && (
+            <Button size="sm" variant="outline" className="h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/5" onClick={() => runBulk("delete")} disabled={bulkLoading}>
+              <Trash2 className="h-3 w-3 mr-1" />Delete All
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setSelected(new Set())}>
+            Clear
+          </Button>
+        </div>
+      )}
+
       {isLoading ? (
         <div className="space-y-3">
           {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-lg" />)}
@@ -202,76 +277,95 @@ export default function ChangeRequests() {
           </p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {changeRequests.map((cr: any) => (
-            <Card key={cr.id} className="hover:border-primary/30 transition-colors">
-              <CardContent className="p-4 flex items-center gap-4">
-                <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setLocation(`/change-requests/${cr.id}`)}>
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="font-medium text-sm">{cr.title}</span>
-                    <StatusBadge status={cr.status} />
+        <>
+          <div className="flex items-center gap-2 pb-1">
+            <Checkbox
+              checked={allSelected}
+              onCheckedChange={toggleSelectAll}
+              id="select-all"
+              aria-label="Select all"
+            />
+            <label htmlFor="select-all" className="text-xs text-muted-foreground cursor-pointer select-none">
+              {allSelected ? "Deselect all" : `Select all (${changeRequests.length})`}
+            </label>
+          </div>
+          <div className="space-y-2">
+            {changeRequests.map((cr: any) => (
+              <Card key={cr.id} className={`transition-colors ${selected.has(cr.id) ? "border-primary/50 bg-primary/5" : "hover:border-primary/30"}`}>
+                <CardContent className="p-4 flex items-center gap-3">
+                  <Checkbox
+                    checked={selected.has(cr.id)}
+                    onCheckedChange={() => toggleSelect(cr.id)}
+                    aria-label={`Select ${cr.title}`}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setLocation(`/change-requests/${cr.id}`)}>
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="font-medium text-sm">{cr.title}</span>
+                      <StatusBadge status={cr.status} />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {cr.projectName} · {cr.clientName} · {(cr.totalCents / 100).toFixed(2)} USD ·{" "}
+                      {timeAgo(cr.createdAt)}
+                    </p>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    {cr.projectName} · {cr.clientName} · {(cr.totalCents / 100).toFixed(2)} USD ·{" "}
-                    {timeAgo(cr.createdAt)}
-                  </p>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  {cr.status === "DRAFT" && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-8 text-xs"
-                      onClick={() => sendCR({ id: cr.id })}
-                    >
-                      <Send className="h-3 w-3 mr-1" />
-                      Send
-                    </Button>
-                  )}
-                  {cr.status === "SENT" && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-8 text-xs"
-                      onClick={() => copyApprovalLink(cr)}
-                    >
-                      <Link2 className="h-3 w-3 mr-1" />
-                      Copy Link
-                    </Button>
-                  )}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
-                        <MoreHorizontal className="h-4 w-4" />
+                  <div className="flex items-center gap-1 shrink-0">
+                    {cr.status === "DRAFT" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs"
+                        onClick={() => sendCR({ id: cr.id })}
+                      >
+                        <Send className="h-3 w-3 mr-1" />
+                        Send
                       </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setLocation(`/change-requests/${cr.id}`)}>
-                        <ExternalLink className="h-3.5 w-3.5 mr-2" />
-                        View Details
-                      </DropdownMenuItem>
-                      {cr.status === "SENT" && (
-                        <DropdownMenuItem onClick={() => copyApprovalLink(cr)}>
-                          <Link2 className="h-3.5 w-3.5 mr-2" />
-                          Copy Approval Link
+                    )}
+                    {cr.status === "SENT" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs"
+                        onClick={() => copyApprovalLink(cr)}
+                      >
+                        <Link2 className="h-3 w-3 mr-1" />
+                        Copy Link
+                      </Button>
+                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setLocation(`/change-requests/${cr.id}`)}>
+                          <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                          View Details
                         </DropdownMenuItem>
-                      )}
-                      {cr.status === "DRAFT" && (
-                        <DropdownMenuItem
-                          className="text-destructive"
-                          onClick={() => { if (confirm("Delete this change order?")) deleteCR({ id: cr.id }); }}
-                        >
-                          <Trash2 className="h-3.5 w-3.5 mr-2" />
-                          Delete
-                        </DropdownMenuItem>
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+                        {cr.status === "SENT" && (
+                          <DropdownMenuItem onClick={() => copyApprovalLink(cr)}>
+                            <Link2 className="h-3.5 w-3.5 mr-2" />
+                            Copy Approval Link
+                          </DropdownMenuItem>
+                        )}
+                        {cr.status === "DRAFT" && (
+                          <DropdownMenuItem
+                            className="text-destructive"
+                            onClick={() => { if (confirm("Delete this change order?")) deleteCR({ id: cr.id }); }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 mr-2" />
+                            Delete
+                          </DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
