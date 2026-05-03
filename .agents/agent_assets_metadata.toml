@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "bmy2Hyeyi8htUl5HFTQUU"
+uri = "file://README.md"
+type = "text"
+title = "ScopeGuard — Production README"
